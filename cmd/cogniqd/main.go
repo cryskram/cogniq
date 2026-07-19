@@ -7,6 +7,7 @@ import (
 	"github.com/cryskram/cogniq/internal/app"
 	"github.com/cryskram/cogniq/internal/config"
 	"github.com/cryskram/cogniq/internal/daemon"
+	"github.com/cryskram/cogniq/internal/logger"
 )
 
 func main() {
@@ -17,6 +18,7 @@ func main() {
 
 	application := &app.App{
 		Config: cfg,
+		Logger: logger.New(cfg.Log),
 	}
 
 	d := daemon.New(application)
