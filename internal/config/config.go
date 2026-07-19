@@ -2,57 +2,58 @@ package config
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Core    CoreConfig
-	Daemon  DaemonConfig
-	MCP     MCPConfig
-	Indexer IndexerConfig
-	Watcher WatcherConfig
-	Search  SearchConfig
-	Log     LogConfig
+	Core    CoreConfig    `mapstructure:"core"`
+	Daemon  DaemonConfig  `mapstructure:"daemon"`
+	MCP     MCPConfig     `mapstructure:"mcp"`
+	Indexer IndexerConfig `mapstructure:"indexer"`
+	Watcher WatcherConfig `mapstructure:"watcher"`
+	Search  SearchConfig  `mapstructure:"search"`
+	Log     LogConfig     `mapstructure:"log"`
 }
 
 type CoreConfig struct {
-	DataDir string
+	DataDir string `mapstructure:"data_dir"`
 }
 
 type DaemonConfig struct {
-	Socket  string
-	TCPHost string
-	TCPPort int
+	Socket  string `mapstructure:"socket"`
+	TCPHost string `mapstructure:"tcp_host"`
+	TCPPort int    `mapstructure:"tcp_port"`
 }
 
 type MCPConfig struct {
-	Enabled   bool
-	Transport string
-	TCPPort   int
+	Enabled   bool   `mapstructure:"enabled"`
+	Transport string `mapstructure:"transport"`
+	TCPPort   int    `mapstructure:"tcp_port"`
 }
 
 type IndexerConfig struct {
-	Concurrency int
-	MaxFileSize int64
-	MaxCommits  int
+	Concurrency int   `mapstructure:"concurrency"`
+	MaxFileSize int64 `mapstructure:"max_file_size"`
+	MaxCommits  int   `mapstructure:"max_commits"`
 }
 
 type WatcherConfig struct {
-	Enabled  bool
-	Debounce time.Duration
+	Enabled  bool          `mapstructure:"enabled"`
+	Debounce time.Duration `mapstructure:"debounce"`
 }
 
 type SearchConfig struct {
-	MaxResults   int
-	PathBoosting bool
+	MaxResults   int  `mapstructure:"max_results"`
+	PathBoosting bool `mapstructure:"path_boosting"`
 }
 
 type LogConfig struct {
-	Level  string
-	Format string
-	Output string
+	Level  string `mapstructure:"level"`
+	Format string `mapstructure:"format"`
+	Output string `mapstructure:"output"`
 }
 
 func Load() (*Config, error) {
@@ -91,6 +92,7 @@ func Load() (*Config, error) {
 	v.SetDefault("log.output", "stderr")
 
 	v.SetEnvPrefix("COGNIQ")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
 	var cfg Config

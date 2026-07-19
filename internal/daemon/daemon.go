@@ -54,6 +54,9 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 func (d *Daemon) initDataDir() error {
 	dir := d.app.Config.Core.DataDir
+	if dir == "" {
+		return fmt.Errorf("data dir not configured")
+	}
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create data dir %s: %w", dir, err)
 	}
