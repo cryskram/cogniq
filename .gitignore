@@ -1,0 +1,17 @@
+bin/
+
+dist/
+
+*.db
+*.db-shm
+*.db-wal
+
+coverage.out
+
+.env
+
+.vscode/
+
+.idea/
+
+tmp/
