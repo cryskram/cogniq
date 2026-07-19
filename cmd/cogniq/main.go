@@ -1,7 +1,13 @@
 package main
 
-import "fmt"
+import (
+	"log"
+
+	"github.com/cryskram/cogniq/internal/cli"
+)
 
 func main() {
-	fmt.Println("Cogniq CLI")
+	if err := cli.Execute(); err != nil {
+		log.Fatal(err)
+	}
 }
