@@ -16,14 +16,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	application := &app.App{
-		Config: cfg,
-		Logger: logger.New(cfg.Log),
-	}
+	zl := logger.New(cfg.Log)
+	application := &app.App{Config: cfg, Logger: zl}
 
 	d := daemon.New(application)
-
 	if err := d.Run(context.Background()); err != nil {
-		log.Fatal(err)
+		zl.Fatal().Err(err).Msg("daemon exited with error")
 	}
 }

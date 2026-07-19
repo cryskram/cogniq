@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/spf13/viper"
@@ -57,8 +58,17 @@ type LogConfig struct {
 func Load() (*Config, error) {
 	v := viper.New()
 
-	v.SetDefault("core.data_dir", "~/.local/share/cogniq")
-	v.SetDefault("daemon.socket", "~/.local/share/cogniq/cogniq.sock")
+	dataDir, err := DefaultDataDir()
+	if err != nil {
+		return nil, fmt.Errorf("default data dir: %w", err)
+	}
+	v.SetDefault("core.data_dir", dataDir)
+
+	socketPath, err := DefaultSocketPath()
+	if err != nil {
+		return nil, fmt.Errorf("default socket path: %w", err)
+	}
+	v.SetDefault("daemon.socket", socketPath)
 	v.SetDefault("daemon.tcp_host", "127.0.0.1")
 	v.SetDefault("daemon.tcp_port", 9876)
 
