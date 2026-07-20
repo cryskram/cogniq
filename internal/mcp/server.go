@@ -67,6 +67,7 @@ func (s *Server) registerTools() {
 	s.tools["get_file_content"] = s.handleGetFileContent
 	s.tools["list_repositories"] = s.handleListRepos
 	s.tools["get_repo_summary"] = s.handleGetRepoSummary
+	s.tools["find_symbol"] = s.handleFindSymbol
 }
 
 func (s *Server) registerResources() {
@@ -196,6 +197,19 @@ func (s *Server) handleToolsList(ctx context.Context, req JSONRPCRequest) {
 					"repo_name": {"type": "string", "description": "Repository name"}
 				},
 				"required": ["repo_name"]
+			}`),
+		},
+		{
+			Name:        "find_symbol",
+			Description: "Search for symbols (functions, classes, structs, methods, interfaces) across indexed repositories by name prefix.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Symbol name prefix to search for (case-sensitive)"},
+					"kind": {"type": "string", "description": "Optional: filter by symbol kind (function, class, struct, method, interface, trait, enum, type, impl)"},
+					"repo_name": {"type": "string", "description": "Optional: filter by repository name"}
+				},
+				"required": ["name"]
 			}`),
 		},
 	}
