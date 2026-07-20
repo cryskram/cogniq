@@ -6,6 +6,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 )
 
 type Querier interface {
@@ -14,11 +15,17 @@ type Querier interface {
 	CreateChunk(ctx context.Context, arg CreateChunkParams) (Chunk, error)
 	CreateDocument(ctx context.Context, arg CreateDocumentParams) (Document, error)
 	CreateRepo(ctx context.Context, arg CreateRepoParams) (Repository, error)
+	CreateSymbol(ctx context.Context, arg CreateSymbolParams) (Symbol, error)
 	DeleteChunksByDoc(ctx context.Context, docID int64) error
 	DeleteDocument(ctx context.Context, id int64) error
 	DeleteDocumentsByRepo(ctx context.Context, repoID int64) error
 	DeleteRepo(ctx context.Context, id int64) error
+	DeleteSymbolsByDoc(ctx context.Context, docID int64) error
 	DocumentExists(ctx context.Context, arg DocumentExistsParams) (int64, error)
+	FindSymbolsByName(ctx context.Context, dollar_1 sql.NullString) ([]FindSymbolsByNameRow, error)
+	FindSymbolsByNameAndKind(ctx context.Context, arg FindSymbolsByNameAndKindParams) ([]FindSymbolsByNameAndKindRow, error)
+	FindSymbolsByRepo(ctx context.Context, arg FindSymbolsByRepoParams) ([]FindSymbolsByRepoRow, error)
+	FindSymbolsByRepoAndKind(ctx context.Context, arg FindSymbolsByRepoAndKindParams) ([]FindSymbolsByRepoAndKindRow, error)
 	GetChunk(ctx context.Context, id int64) (Chunk, error)
 	GetChunkCountsByRepo(ctx context.Context, repoID int64) ([]GetChunkCountsByRepoRow, error)
 	GetDocument(ctx context.Context, id int64) (Document, error)

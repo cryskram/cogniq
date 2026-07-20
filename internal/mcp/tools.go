@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -163,6 +164,98 @@ func (s *Server) handleListRepos(ctx context.Context, params map[string]any) Cal
 		sb.WriteString(fmt.Sprintf("  Files:   %d\n", r.FileCount))
 		sb.WriteString(fmt.Sprintf("  Indexed: %s\n", lastIndexed))
 		sb.WriteString("\n")
+	}
+
+	return s.textContent(sb.String())
+}
+
+func (s *Server) handleFindSymbol(ctx context.Context, params map[string]any) CallToolResult {
+	name := strParam(params, "name")
+	if name == "" {
+		return s.errorContent("name is required")
+	}
+
+	kind := strParam(params, "kind")
+	repoName := strParam(params, "repo_name")
+
+	ok, err := s.hasRepos(ctx)
+	if err != nil {
+		return s.errorContent("check repos: " + err.Error())
+	}
+	if !ok {
+		return s.textContent("No symbols found. " + noReposHelp)
+	}
+
+	var rows []db.FindSymbolsByNameRow
+	switch {
+	case repoName != "" && kind != "":
+		data, qErr := s.queries.FindSymbolsByRepoAndKind(ctx, db.FindSymbolsByRepoAndKindParams{
+			Name:    repoName,
+			Column2: sql.NullString{String: name, Valid: true},
+			Kind:    kind,
+		})
+		if qErr != nil {
+			return s.errorContent(fmt.Sprintf("search symbols failed: %v", qErr))
+		}
+		for _, r := range data {
+			rows = append(rows, db.FindSymbolsByNameRow{
+				ID: r.ID, DocID: r.DocID, Name: r.Name,
+				Kind: r.Kind, Line: r.Line, Col: r.Col,
+				Path: r.Path, RepoID: r.RepoID, RepoName: r.RepoName,
+			})
+		}
+	case repoName != "":
+		data, qErr := s.queries.FindSymbolsByRepo(ctx, db.FindSymbolsByRepoParams{
+			Name:    repoName,
+			Column2: sql.NullString{String: name, Valid: true},
+		})
+		if qErr != nil {
+			return s.errorContent(fmt.Sprintf("search symbols failed: %v", qErr))
+		}
+		for _, r := range data {
+			rows = append(rows, db.FindSymbolsByNameRow{
+				ID: r.ID, DocID: r.DocID, Name: r.Name,
+				Kind: r.Kind, Line: r.Line, Col: r.Col,
+				Path: r.Path, RepoID: r.RepoID, RepoName: r.RepoName,
+			})
+		}
+	case kind != "":
+		data, qErr := s.queries.FindSymbolsByNameAndKind(ctx, db.FindSymbolsByNameAndKindParams{
+			Column1: sql.NullString{String: name, Valid: true},
+			Kind:    kind,
+		})
+		if qErr != nil {
+			return s.errorContent(fmt.Sprintf("search symbols failed: %v", qErr))
+		}
+		for _, r := range data {
+			rows = append(rows, db.FindSymbolsByNameRow{
+				ID: r.ID, DocID: r.DocID, Name: r.Name,
+				Kind: r.Kind, Line: r.Line, Col: r.Col,
+				Path: r.Path, RepoID: r.RepoID, RepoName: r.RepoName,
+			})
+		}
+	default:
+		var qErr error
+		rows, qErr = s.queries.FindSymbolsByName(ctx, sql.NullString{String: name, Valid: true})
+		if qErr != nil {
+			return s.errorContent(fmt.Sprintf("search symbols failed: %v", qErr))
+		}
+	}
+
+	if len(rows) == 0 {
+		return s.textContent("No symbols found matching: " + name)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d symbol(s) matching %q:\n\n", len(rows), name))
+	for i, r := range rows {
+		sb.WriteString(fmt.Sprintf("--- %d ---\n", i+1))
+		sb.WriteString(fmt.Sprintf("Name:     %s\n", r.Name))
+		sb.WriteString(fmt.Sprintf("Kind:     %s\n", r.Kind))
+		sb.WriteString(fmt.Sprintf("File:     %s\n", r.Path))
+		sb.WriteString(fmt.Sprintf("Repo:     %s\n", r.RepoName))
+		sb.WriteString(fmt.Sprintf("Line:     %d\n", r.Line))
+		sb.WriteString(fmt.Sprintf("Column:   %d\n\n", r.Col))
 	}
 
 	return s.textContent(sb.String())

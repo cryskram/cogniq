@@ -11,6 +11,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/cryskram/relith/internal/chunker"
 	"github.com/cryskram/relith/internal/config"
 	"github.com/cryskram/relith/internal/db"
 )
@@ -252,7 +253,14 @@ func (idx *Indexer) writeFile(
 	}
 	langStr := lang
 
-	chunks := ChunkContent(content, DefaultChunkSize, DefaultChunkOverlap)
+	var chunks []chunker.Chunk
+	langChunker := chunker.ForLanguage(lang)
+	if langChunker != nil {
+		chunks = langChunker(content)
+	}
+	if len(chunks) == 0 {
+		return 0, nil
+	}
 
 	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -276,6 +284,9 @@ func (idx *Indexer) writeFile(
 		}
 		if err := qtx.DeleteChunksByDoc(ctx, existing.ID); err != nil {
 			return 0, fmt.Errorf("delete chunks: %w", err)
+		}
+		if err := qtx.DeleteSymbolsByDoc(ctx, existing.ID); err != nil {
+			return 0, fmt.Errorf("delete symbols: %w", err)
 		}
 		docID = existing.ID
 	} else {
@@ -301,6 +312,17 @@ func (idx *Indexer) writeFile(
 			Content:    c.Content,
 		}); err != nil {
 			return 0, fmt.Errorf("create chunk: %w", err)
+		}
+		for _, sym := range c.Symbols {
+			if _, err := qtx.CreateSymbol(ctx, db.CreateSymbolParams{
+				DocID: docID,
+				Name:  sym.Name,
+				Kind:  sym.Kind,
+				Line:  int64(sym.Line),
+				Col:   int64(sym.Col),
+			}); err != nil {
+				return 0, fmt.Errorf("create symbol: %w", err)
+			}
 		}
 	}
 

@@ -3,6 +3,7 @@ module github.com/cryskram/relith
 go 1.26.4
 
 require (
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/pressly/goose/v3 v3.27.2
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
@@ -12,7 +13,6 @@ require (
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

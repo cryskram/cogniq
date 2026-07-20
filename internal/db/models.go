@@ -50,3 +50,12 @@ type Repository struct {
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
+
+type Symbol struct {
+	ID    int64  `json:"id"`
+	DocID int64  `json:"doc_id"`
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Line  int64  `json:"line"`
+	Col   int64  `json:"col"`
+}
