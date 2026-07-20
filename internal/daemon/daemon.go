@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/cryskram/relith/internal/api"
 	"github.com/cryskram/relith/internal/app"
 	"github.com/cryskram/relith/internal/db"
 )
 
 type Daemon struct {
-	app *app.App
+	app    *app.App
+	apiSrv *api.Server
 }
 
 func New(app *app.App) *Daemon {
@@ -37,6 +39,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return fmt.Errorf("migrate: %w", err)
 	}
 
+	d.apiSrv = api.New(d.app.DB, d.app.Logger, d.app.Config)
+	if err := d.apiSrv.Start(); err != nil {
+		return fmt.Errorf("api server: %w", err)
+	}
+	defer d.stopAPI(ctx)
+
 	d.app.Logger.Info().Msg("daemon ready")
 
 	ctx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
@@ -50,6 +58,14 @@ func (d *Daemon) Run(ctx context.Context) error {
 		return nil
 	}
 	return ctx.Err()
+}
+
+func (d *Daemon) stopAPI(ctx context.Context) {
+	if d.apiSrv != nil {
+		if err := d.apiSrv.Stop(ctx); err != nil {
+			d.app.Logger.Error().Err(err).Msg("stop api server")
+		}
+	}
 }
 
 func (d *Daemon) initDataDir() error {
