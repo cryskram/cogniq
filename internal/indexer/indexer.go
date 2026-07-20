@@ -89,12 +89,32 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath string, repoID int64
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := idx.processFile(ctx, fi, repoID, existingByPath, &visited, &mu, &result); err != nil {
+			visited.Store(fi.RelPath, struct{}{})
+
+			existing, exists := existingByPath[fi.RelPath]
+			var existingPtr *db.Document
+			if exists {
+				if existing.Hash == idx.fileHash(ctx, fi.FullPath) {
+					mu.Lock()
+					result.FilesSkipped++
+					mu.Unlock()
+					return
+				}
+				existingPtr = &existing
+			}
+
+			n, err := idx.writeFile(ctx, repoID, fi.RelPath, fi.FullPath, fi.Size, fi.ModTime, existingPtr, nil)
+			if err != nil {
 				idx.logger.Error().Err(err).Str("file", fi.RelPath).Msg("processing file")
 				mu.Lock()
 				result.FilesError++
 				mu.Unlock()
+				return
 			}
+			mu.Lock()
+			result.FilesIndexed++
+			result.TotalChunks += n
+			mu.Unlock()
 		}()
 	}
 	wg.Wait()
@@ -134,39 +154,98 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath string, repoID int64
 	return result, nil
 }
 
-func (idx *Indexer) processFile(
-	ctx context.Context,
-	fi FileInfo,
-	repoID int64,
-	existingByPath map[string]db.Document,
-	visited *sync.Map,
-	mu *sync.Mutex,
-	result *IndexResult,
-) error {
-	visited.Store(fi.RelPath, struct{}{})
+func (idx *Indexer) IndexFile(ctx context.Context, repoID int64, relPath, fullPath string) error {
+	idx.logger.Debug().Str("path", relPath).Int64("repo_id", repoID).Msg("index file")
 
-	content, err := ReadFileContent(fi.FullPath, idx.cfg.MaxFileSize)
+	q := idx.queries()
+	existing, err := q.GetDocumentByPath(ctx, db.GetDocumentByPathParams{
+		RepoID: repoID,
+		Path:   relPath,
+	})
+	exists := err == nil
+
+	if exists {
+		if existing.Hash == idx.fileHash(ctx, fullPath) {
+			idx.logger.Debug().Str("path", relPath).Msg("file unchanged, skipping")
+			return nil
+		}
+		_, err = idx.writeFile(ctx, repoID, relPath, fullPath, 0, 0, &existing, nil)
+		return err
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("get existing doc: %w", err)
+	}
+
+	_, err = idx.writeFile(ctx, repoID, relPath, fullPath, 0, 0, nil, nil)
+	return err
+}
+
+func (idx *Indexer) DeleteFile(ctx context.Context, repoID int64, relPath string) error {
+	idx.logger.Debug().Str("path", relPath).Int64("repo_id", repoID).Msg("delete file")
+
+	q := idx.queries()
+	doc, err := q.GetDocumentByPath(ctx, db.GetDocumentByPathParams{
+		RepoID: repoID,
+		Path:   relPath,
+	})
 	if err != nil {
-		return fmt.Errorf("read: %w", err)
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return fmt.Errorf("get doc: %w", err)
+	}
+
+	if err := q.DeleteDocument(ctx, doc.ID); err != nil {
+		return fmt.Errorf("delete doc: %w", err)
+	}
+
+	q.UpdateRepoStatus(ctx, db.UpdateRepoStatusParams{
+		Status: "ready",
+		ID:     repoID,
+	})
+	return nil
+}
+
+func (idx *Indexer) fileHash(ctx context.Context, fullPath string) string {
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(data))
+}
+
+func (idx *Indexer) writeFile(
+	ctx context.Context,
+	repoID int64,
+	relPath, fullPath string,
+	size, modTime int64,
+	existing *db.Document,
+	result *IndexResult,
+) (int, error) {
+	if size <= 0 {
+		info, err := os.Stat(fullPath)
+		if err != nil {
+			return 0, fmt.Errorf("stat: %w", err)
+		}
+		size = info.Size()
+		modTime = info.ModTime().Unix()
+	}
+
+	content, err := ReadFileContent(fullPath, idx.cfg.MaxFileSize)
+	if err != nil {
+		return 0, fmt.Errorf("read: %w", err)
 	}
 	if content == "" {
-		mu.Lock()
-		result.FilesSkipped++
-		mu.Unlock()
-		return nil
+		return 0, nil
 	}
 
 	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
 
-	existing, exists := existingByPath[fi.RelPath]
-	if exists && existing.Hash == hash {
-		mu.Lock()
-		result.FilesSkipped++
-		mu.Unlock()
-		return nil
+	if existing != nil && existing.Hash == hash {
+		return 0, nil
 	}
 
-	lang := DetectLanguage(fi.RelPath)
+	lang := DetectLanguage(relPath)
 	mimeStr := ""
 	if lang != "" {
 		mimeStr = "text/" + lang
@@ -177,69 +256,59 @@ func (idx *Indexer) processFile(
 
 	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+		return 0, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
 	qtx := idx.queries().WithTx(tx)
 
-	if exists {
+	var docID int64
+	if existing != nil {
 		if err := qtx.UpdateDocument(ctx, db.UpdateDocumentParams{
 			ID:       existing.ID,
-			Size:     fi.Size,
+			Size:     size,
 			Hash:     hash,
-			ModTime:  time.Unix(fi.ModTime, 0),
+			ModTime:  time.Unix(modTime, 0),
 			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
 			Language: sql.NullString{String: langStr, Valid: langStr != ""},
 		}); err != nil {
-			return fmt.Errorf("update doc: %w", err)
+			return 0, fmt.Errorf("update doc: %w", err)
 		}
 		if err := qtx.DeleteChunksByDoc(ctx, existing.ID); err != nil {
-			return fmt.Errorf("delete chunks: %w", err)
+			return 0, fmt.Errorf("delete chunks: %w", err)
 		}
-		for _, c := range chunks {
-			if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
-				DocID:      existing.ID,
-				ChunkIndex: int64(c.Index),
-				Content:    c.Content,
-			}); err != nil {
-				return fmt.Errorf("create chunk: %w", err)
-			}
-		}
+		docID = existing.ID
 	} else {
 		doc, err := qtx.CreateDocument(ctx, db.CreateDocumentParams{
 			RepoID:   repoID,
-			Path:     fi.RelPath,
-			Size:     fi.Size,
+			Path:     relPath,
+			Size:     size,
 			Hash:     hash,
-			ModTime:  time.Unix(fi.ModTime, 0),
+			ModTime:  time.Unix(modTime, 0),
 			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
 			Language: sql.NullString{String: langStr, Valid: langStr != ""},
 		})
 		if err != nil {
-			return fmt.Errorf("create doc: %w", err)
+			return 0, fmt.Errorf("create doc: %w", err)
 		}
-		for _, c := range chunks {
-			if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
-				DocID:      doc.ID,
-				ChunkIndex: int64(c.Index),
-				Content:    c.Content,
-			}); err != nil {
-				return fmt.Errorf("create chunk: %w", err)
-			}
+		docID = doc.ID
+	}
+
+	for _, c := range chunks {
+		if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
+			DocID:      docID,
+			ChunkIndex: int64(c.Index),
+			Content:    c.Content,
+		}); err != nil {
+			return 0, fmt.Errorf("create chunk: %w", err)
 		}
 	}
 
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
+		return 0, fmt.Errorf("commit tx: %w", err)
 	}
 
-	mu.Lock()
-	result.FilesIndexed++
-	result.TotalChunks += len(chunks)
-	mu.Unlock()
-
-	return nil
+	return len(chunks), nil
 }
 
 func IsGitRepo(path string) bool {
