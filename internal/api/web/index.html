@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Relith Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            relith: { DEFAULT: '#f97316', dark: '#ea580c', light: '#fb923c' }
+          }
+        }
+      }
+    }
+  </script>
+</head>
+<body class="bg-gray-950 text-gray-100 font-sans antialiased min-h-screen">
+  <div class="max-w-6xl mx-auto px-4 py-6">
+
+    <!-- Header -->
+    <header class="flex items-center justify-between mb-6 pb-4 border-b border-gray-800">
+      <div class="flex items-center gap-3">
+        <span class="text-2xl font-bold text-relith tracking-tight">relith</span>
+        <span class="text-sm text-gray-500 hidden sm:inline">dashboard</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="repo-count-header" class="text-xs text-gray-600"></span>
+        <span id="status-dot" class="w-2.5 h-2.5 rounded-full bg-gray-600"></span>
+        <span id="status-text" class="text-sm text-gray-400">connecting...</span>
+      </div>
+    </header>
+
+    <!-- Repos Section -->
+    <section class="mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Repositories</h2>
+        <span id="repo-count" class="text-xs text-gray-600"></span>
+      </div>
+      <div id="repo-list" class="space-y-2"></div>
+      <div id="repo-empty" class="hidden text-center py-16 text-gray-600">
+        <p class="text-base mb-2">No repositories tracked</p>
+        <p class="text-sm">Add one with <code class="text-relith bg-gray-900 px-1.5 py-0.5 rounded">relith repo add &lt;path&gt;</code> and run <code class="text-relith bg-gray-900 px-1.5 py-0.5 rounded">relith index</code></p>
+      </div>
+    </section>
+
+    <!-- Search Section -->
+    <section>
+      <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Search</h2>
+      <div class="flex gap-2 mb-3">
+        <input id="search-input" type="text" placeholder="Search across all indexed code..."
+               class="flex-1 px-4 py-2.5 bg-gray-900 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-relith focus:ring-1 focus:ring-relith/40 transition-colors">
+        <button id="search-btn" class="px-5 py-2.5 bg-relith hover:bg-relith-dark text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50">Search</button>
+      </div>
+      <div id="search-meta" class="text-xs text-gray-600 mb-2 h-4"></div>
+      <div id="search-results" class="space-y-2"></div>
+      <div id="search-empty" class="text-center py-12 text-gray-600 text-sm">
+        Enter a query to search code across all your repositories
+      </div>
+    </section>
+
+  </div>
+
+  <!-- File Detail Modal -->
+  <div id="modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 p-4">
+    <div class="bg-gray-900 border border-gray-700 rounded-xl max-w-3xl w-full max-h-[80vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800">
+        <div class="flex-1 min-w-0">
+          <div id="modal-repo" class="text-xs text-relith-light truncate"></div>
+          <div id="modal-path" class="text-sm text-gray-200 font-medium truncate"></div>
+        </div>
+        <button onclick="closeModal()" class="ml-4 text-gray-500 hover:text-gray-300 text-xl leading-none">&times;</button>
+      </div>
+      <pre id="modal-content" class="flex-1 overflow-auto p-5 text-xs text-gray-300 leading-relaxed whitespace-pre-wrap font-mono"></pre>
+    </div>
+  </div>
+
+  <script>
+    const API = ''
+
+    function $(id) { return document.getElementById(id) }
+
+    function escapeHtml(s) {
+      const d = document.createElement('div')
+      d.textContent = s || ''
+      return d.innerHTML
+    }
+
+    function truncate(s, n) {
+      return s && s.length > n ? s.slice(0, n) + '...' : s
+    }
+
+    // --- Date ---
+    function parseTime(ts) {
+      if (!ts) return null
+      if (ts.Time) return parseTime(ts.Time)
+      const d = new Date(ts)
+      return isNaN(d.getTime()) ? null : d
+    }
+
+    function timeAgo(ts) {
+      if (!ts) return 'never'
+      const d = parseTime(ts)
+      if (!d) return 'never'
+      const sec = Math.floor((Date.now() - d.getTime()) / 1000)
+      if (sec < 5) return 'just now'
+      if (sec < 60) return sec + 's ago'
+      if (sec < 3600) return Math.floor(sec / 60) + 'm ago'
+      if (sec < 86400) return Math.floor(sec / 3600) + 'h ago'
+      return Math.floor(sec / 86400) + 'd ago'
+    }
+
+    // --- Colors ---
+    const langColors = {
+      Go:'#00ADD8', Python:'#3572A5', JavaScript:'#F7DF1E', TypeScript:'#3178C6',
+      Rust:'#DEA584', Java:'#B07219', 'C++':'#F34B7D', 'C#':'#178600',
+      Ruby:'#701516', PHP:'#4F5D95', Swift:'#F05138', Kotlin:'#A97BFF',
+      Dart:'#00B4AB', Scala:'#DC322F', Lua:'#000080', Haskell:'#5e5086',
+      Shell:'#89E051', YAML:'#CB171E', JSON:'#292929', HTML:'#E34F26',
+      CSS:'#563D7C', Markdown:'#083FA1', SQL:'#E38C00',
+    }
+
+    function langColor(lang) { return langColors[lang] || '#f97316' }
+
+    const statusStyles = {
+      pending:  'bg-yellow-500/15 text-yellow-400 border-yellow-500/25',
+      indexing: 'bg-blue-500/15 text-blue-400 border-blue-500/25',
+      ready:    'bg-emerald-500/15 text-emerald-400 border-emerald-500/25',
+      failed:   'bg-red-500/15 text-red-400 border-red-500/25',
+    }
+
+    function statusBadge(s) {
+      const st = (s || 'unknown').toLowerCase()
+      const c = statusStyles[st] || 'bg-gray-500/15 text-gray-400 border-gray-500/25'
+      return '<span class="inline-block px-2 py-0.5 text-xs font-medium rounded-md border ' + c + '">' + s + '</span>'
+    }
+
+    // --- Status ---
+    async function updateStatus() {
+      try {
+        const r = await fetch(API + '/v1/health')
+        if (!r.ok) throw new Error(String(r.status))
+        $('status-dot').className = 'w-2.5 h-2.5 rounded-full bg-emerald-500'
+        $('status-text').textContent = 'online'
+      } catch {
+        $('status-dot').className = 'w-2.5 h-2.5 rounded-full bg-red-500'
+        $('status-text').textContent = 'offline'
+      }
+    }
+
+    // --- Repos ---
+    async function loadRepos() {
+      try {
+        const r = await fetch(API + '/v1/repos')
+        if (!r.ok) return
+        renderRepos(await r.json())
+      } catch {}
+    }
+
+    function renderRepos(repos) {
+      $('repo-count').textContent = repos.length + ' total'
+      $('repo-count-header').textContent = repos.length + ' repo' + (repos.length !== 1 ? 's' : '')
+
+      if (repos.length === 0) {
+        $('repo-list').innerHTML = ''
+        $('repo-empty').classList.remove('hidden')
+        return
+      }
+      $('repo-empty').classList.add('hidden')
+
+      $('repo-list').innerHTML = repos.map(r => {
+        const badge = statusBadge(r.status)
+        const lastIdx = r.last_indexed_at
+        const ago = timeAgo(lastIdx)
+        return `
+          <div class="bg-gray-900/80 border border-gray-800 hover:border-gray-700 rounded-xl px-5 py-4 transition-colors cursor-pointer" onclick="toggleDetail('${r.id}', this)">
+            <div class="flex items-center gap-4">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 mb-1">
+                  <span class="font-semibold text-sm text-gray-200 truncate">${escapeHtml(r.name)}</span>
+                  ${badge}
+                </div>
+                <div class="text-xs text-gray-500 truncate">${escapeHtml(r.path)}</div>
+              </div>
+              <div class="text-right text-xs text-gray-500 shrink-0 leading-relaxed">
+                <div><span class="text-gray-400 font-medium">${r.file_count}</span> files</div>
+                <div>${ago}</div>
+              </div>
+            </div>
+            <div class="repo-detail hidden mt-4 pt-4 border-t border-gray-800 text-xs text-gray-400" data-id="${r.id}"></div>
+          </div>`
+      }).join('')
+    }
+
+    async function toggleDetail(id, el) {
+      const detail = el.querySelector('.repo-detail')
+      if (!detail) return
+      const isHidden = detail.classList.contains('hidden')
+      detail.classList.toggle('hidden')
+      if (isHidden && !detail.dataset.loaded) {
+        detail.dataset.loaded = '1'
+        detail.innerHTML = '<div class="text-gray-600 py-2">loading...</div>'
+        try {
+          const r = await fetch(API + '/v1/repos/' + id)
+          const repo = await r.json()
+          if (repo.error) {
+            detail.innerHTML = '<span class="text-red-400">' + repo.error + '</span>'
+            return
+          }
+          const lastIdx = repo.LastIndexedAt || repo.last_indexed_at
+          detail.innerHTML = `
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div><span class="text-gray-600">ID</span><br><span class="text-gray-300">${repo.ID || repo.id || '-'}</span></div>
+              <div><span class="text-gray-600">Status</span><br><span class="text-gray-300">${repo.Status || repo.status || '-'}</span></div>
+              <div><span class="text-gray-600">Files</span><br><span class="text-gray-300 font-medium">${repo.FileCount || repo.file_count || 0}</span></div>
+              <div><span class="text-gray-600">Indexed</span><br><span class="text-gray-300">${timeAgo(lastIdx)}</span></div>
+            </div>`
+        } catch (e) {
+          detail.innerHTML = '<span class="text-red-400">' + e.message + '</span>'
+        }
+      }
+    }
+
+    // --- Search ---
+    let searchTimeout = null
+
+    function doSearch() {
+      clearTimeout(searchTimeout)
+      const q = $('search-input').value.trim()
+      if (!q) {
+        $('search-results').innerHTML = ''
+        $('search-meta').textContent = ''
+        $('search-empty').classList.remove('hidden')
+        return
+      }
+      $('search-empty').classList.add('hidden')
+      $('search-meta').textContent = 'searching...'
+      searchTimeout = setTimeout(async () => {
+        try {
+          const r = await fetch(API + '/v1/search?q=' + encodeURIComponent(q) + '&limit=25')
+          if (!r.ok) throw new Error(String(r.status))
+          const data = await r.json()
+          renderResults(q, data)
+        } catch (e) {
+          $('search-meta').textContent = 'error: ' + e.message
+        }
+      }, 250)
+    }
+
+    $('search-input').addEventListener('input', doSearch)
+    $('search-btn').addEventListener('click', doSearch)
+    $('search-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') doSearch()
+    })
+
+    function renderResults(query, results) {
+      if (!results || results.length === 0) {
+        $('search-results').innerHTML = '<div class="text-gray-600 text-sm text-center py-8">No results found</div>'
+        $('search-meta').textContent = '0 results'
+        return
+      }
+      $('search-meta').textContent = results.length + ' result' + (results.length !== 1 ? 's' : '')
+      $('search-results').innerHTML = results.map(r => {
+        const lang = r.language || ''
+        const langDot = lang ? `<span class="inline-block w-2.5 h-2.5 rounded-full mr-1.5 shrink-0" style="background:${langColor(lang)}"></span>` : ''
+        return `
+          <div class="bg-gray-900/80 border border-gray-800 hover:border-gray-700 rounded-xl px-4 py-3 transition-colors cursor-pointer" data-repo="${r.repo_name}" data-path="${r.path}" onclick="showFile(this)">
+            <div class="flex items-start gap-3">
+              <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2 text-sm mb-1">
+                  <span class="font-medium text-gray-200 truncate">${escapeHtml(r.repo_name)}</span>
+                  <span class="text-gray-600">/</span>
+                  <span class="text-gray-400 truncate">${escapeHtml(r.path)}</span>
+                </div>
+                <div class="text-xs text-gray-500 leading-relaxed line-clamp-2">${snippet(r.content, query)}</div>
+              </div>
+              <div class="flex items-center gap-2 shrink-0 text-xs text-gray-600">
+                ${langDot}${lang ? '<span>' + lang + '</span>' : ''}
+                <span class="text-gray-700">${(r.score || 0).toFixed(2)}</span>
+              </div>
+            </div>
+          </div>`
+      }).join('')
+    }
+
+    function snippet(content, query) {
+      if (!content) return ''
+      const q = query.toLowerCase()
+      const idx = content.toLowerCase().indexOf(q)
+      if (idx < 0) return escapeHtml(truncate(content.trim(), 200))
+      const start = Math.max(0, idx - 60)
+      const end = Math.min(content.length, idx + q.length + 100)
+      let s = content.slice(start, end).trim()
+      if (start > 0) s = '...' + s
+      if (end < content.length) s = s + '...'
+      return escapeHtml(s)
+    }
+
+    // --- File Detail Modal ---
+    async function showFile(el) {
+      const repoName = el.dataset.repo
+      const path = el.dataset.path
+      const modal = $('modal')
+      $('modal-repo').textContent = repoName
+      $('modal-path').textContent = path
+      $('modal-content').textContent = 'loading...'
+      modal.classList.remove('hidden')
+      modal.classList.add('flex')
+
+      try {
+        const r = await fetch(API + '/v1/content?repo=' + encodeURIComponent(repoName) + '&path=' + encodeURIComponent(path))
+        if (!r.ok) {
+          const text = await r.text()
+          throw new Error(text || String(r.status))
+        }
+        $('modal-content').textContent = await r.text()
+      } catch (e) {
+        $('modal-content').textContent = '// Error: ' + e.message
+      }
+    }
+
+    function closeModal() {
+      $('modal').classList.add('hidden')
+      $('modal').classList.remove('flex')
+    }
+
+    $('modal').addEventListener('click', function(e) {
+      if (e.target === this) closeModal()
+    })
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') closeModal()
+    })
+
+    // --- Init ---
+    updateStatus()
+    loadRepos()
+    setInterval(updateStatus, 5000)
+    setInterval(loadRepos, 5000)
+  </script>
+</body>
+</html>

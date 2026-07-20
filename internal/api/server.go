@@ -32,6 +32,7 @@ func New(database *sql.DB, logger zerolog.Logger, cfg *config.Config) *Server {
 	}
 
 	mux := http.NewServeMux()
+	mux.Handle("GET /", dashboardHandler())
 	mux.HandleFunc("GET /v1/health", h.health)
 	mux.HandleFunc("GET /v1/repos", h.listRepos)
 	mux.HandleFunc("POST /v1/repos", h.createRepo)
@@ -39,6 +40,7 @@ func New(database *sql.DB, logger zerolog.Logger, cfg *config.Config) *Server {
 	mux.HandleFunc("DELETE /v1/repos/{id}", h.deleteRepo)
 	mux.HandleFunc("POST /v1/repos/{id}/index", h.indexRepo)
 	mux.HandleFunc("GET /v1/search", h.search)
+	mux.HandleFunc("GET /v1/content", h.content)
 
 	httpSrv := &http.Server{
 		Handler:     withLogging(mux, logger),

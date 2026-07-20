@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -128,6 +129,59 @@ func (h *handlers) indexRepo(w http.ResponseWriter, r *http.Request) {
 		"total_chunks":  result.TotalChunks,
 		"elapsed":       result.Elapsed.String(),
 	})
+}
+
+func (h *handlers) content(w http.ResponseWriter, r *http.Request) {
+	repoName := r.URL.Query().Get("repo")
+	filePath := r.URL.Query().Get("path")
+	if repoName == "" || filePath == "" {
+		writeError(w, http.StatusBadRequest, "repo and path query params are required")
+		return
+	}
+
+	repos, err := h.queries.ListRepos(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list repos: "+err.Error())
+		return
+	}
+
+	var repo db.Repository
+	found := false
+	for _, rp := range repos {
+		if rp.Name == repoName {
+			repo = rp
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "repo not found: "+repoName)
+		return
+	}
+
+	doc, err := h.queries.GetDocumentByPath(r.Context(), db.GetDocumentByPathParams{
+		RepoID: repo.ID,
+		Path:   filePath,
+	})
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "file not found: "+filePath)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get document: "+err.Error())
+		return
+	}
+
+	fullPath := filepath.Join(repo.Path, doc.Path)
+	content, err := indexer.ReadFileContent(fullPath, 10*1024*1024)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "read file: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte(content))
 }
 
 func (h *handlers) search(w http.ResponseWriter, r *http.Request) {

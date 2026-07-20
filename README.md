@@ -113,10 +113,12 @@ curl -s -X POST http://127.0.0.1:9876/v1/repos \
   -d '{"path":"/path/to/repo","name":"my-repo"}'
 curl -s -X POST http://127.0.0.1:9876/v1/repos/1/index
 curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
+curl -s "http://127.0.0.1:9876/v1/content?repo=my-repo&path=main.go"
 ```
 
 | Method | Path | Description |
 |--------|------|-------------|
+| `GET` | `/` | Dashboard web UI (embedded, served by relithd) |
 | `GET` | `/v1/health` | Health check |
 | `GET` | `/v1/repos` | List repositories |
 | `POST` | `/v1/repos` | Create repository |
@@ -124,6 +126,7 @@ curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
 | `DELETE` | `/v1/repos/{id}` | Delete repository |
 | `POST` | `/v1/repos/{id}/index` | Trigger indexing |
 | `GET` | `/v1/search?q=` | Full-text search |
+| `GET` | `/v1/content?repo=&path=` | Get file content by repo name and path |
 
 ## Configuration
 
