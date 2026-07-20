@@ -10,6 +10,7 @@ build-all:
 	-mkdir bin
 	go build $(LDFLAGS) -o bin/relith$(shell go env GOEXE) ./cmd/relith
 	go build $(LDFLAGS) -o bin/relithd$(shell go env GOEXE) ./cmd/relithd
+	go build $(LDFLAGS) -o bin/relithmcp$(shell go env GOEXE) ./cmd/relithmcp
 
 release: clean build-all
 	@echo "Binaries in bin/"
