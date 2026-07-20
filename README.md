@@ -52,8 +52,10 @@ make build-all
 |---------|-------------|
 | `relith repo add <path>` | Register a repository for indexing |
 | `relith repo list` | List all indexed repositories |
+| `relith repo remove <id-or-name>` | Remove a repository and all its data |
 | `relith index [path]` | Index a repo (or all pending) |
 | `relith search <query>` | Full-text search across all indexed code |
+| `relith serve` | Start the daemon (REST API + dashboard + file watcher) |
 | `relith status` | Show indexing status with file/chunk counts |
 | `relith version` | Print version |
 

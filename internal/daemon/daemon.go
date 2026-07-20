@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/cryskram/relith/internal/api"
 	"github.com/cryskram/relith/internal/app"
@@ -62,8 +63,12 @@ func (d *Daemon) Run(ctx context.Context) error {
 
 func (d *Daemon) stopAPI(ctx context.Context) {
 	if d.apiSrv != nil {
-		if err := d.apiSrv.Stop(ctx); err != nil {
-			d.app.Logger.Error().Err(err).Msg("stop api server")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := d.apiSrv.Stop(shutdownCtx); err != nil {
+			if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+				d.app.Logger.Error().Err(err).Msg("stop api server")
+			}
 		}
 	}
 }

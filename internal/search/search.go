@@ -58,7 +58,7 @@ func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Resul
 	sqlQuery := fmt.Sprintf(`
 		SELECT c.id, c.chunk_index, c.content,
 			   d.id, d.path, d.language,
-			   r.name
+			   r.name, rank
 		FROM chunks_fts f
 		JOIN chunks c ON c.id = f.rowid
 		JOIN documents d ON d.id = c.doc_id
@@ -87,20 +87,23 @@ func (s *Searcher) Search(ctx context.Context, query string, limit int) ([]Resul
 		var r Result
 		var content string
 		var lang, repoName sql.NullString
+		var rawDocID int64
 		if err := rows.Scan(
 			&r.DocumentID,
 			&r.ChunkIndex,
 			&content,
-			&r.DocumentID,
+			&rawDocID,
 			&r.Path,
 			&lang,
 			&repoName,
+			&r.Score,
 		); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 		r.Language = lang.String
 		r.RepoName = repoName.String
 		r.Content = truncateContent(content, 500)
+		r.Score = -r.Score
 		results = append(results, r)
 	}
 	if err := rows.Err(); err != nil {
