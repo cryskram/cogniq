@@ -1,4 +1,4 @@
-VERSION ?= $(shell git describe --tags --always --dirty || echo v0.2.0-dev)
+VERSION ?= $(shell git describe --tags --always --dirty || echo v0.3.0-dev)
 LDFLAGS := -ldflags "-X github.com/cryskram/relith/internal/cli.Version=$(VERSION)"
 
 .PHONY: build build-all run test fmt lint vet tidy clean sqlc release
@@ -12,8 +12,18 @@ build-all:
 	go build $(LDFLAGS) -o bin/relithd$(shell go env GOEXE) ./cmd/relithd
 	go build $(LDFLAGS) -o bin/relithmcp$(shell go env GOEXE) ./cmd/relithmcp
 
-release: clean build-all
-	@echo "Binaries in bin/"
+release-all: clean
+	@mkdir -p bin
+	@for platform in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do \
+		GOOS=$$(echo $$platform | cut -d/ -f1); \
+		GOARCH=$$(echo $$platform | cut -d/ -f2); \
+		ext=; [ $$GOOS = windows ] && ext=.exe; \
+		echo "Building $$GOOS/$$GOARCH..."; \
+		GOOS=$$GOOS GOARCH=$$GOARCH go build $(LDFLAGS) -o bin/relith-$$GOOS-$$GOARCH$$ext ./cmd/relith; \
+		GOOS=$$GOOS GOARCH=$$GOARCH go build $(LDFLAGS) -o bin/relithd-$$GOOS-$$GOARCH$$ext ./cmd/relithd; \
+		GOOS=$$GOOS GOARCH=$$GOARCH go build $(LDFLAGS) -o bin/relithmcp-$$GOOS-$$GOARCH$$ext ./cmd/relithmcp; \
+	done
+	@echo "Release binaries in bin/:"; ls -1 bin/
 
 run:
 	go run $(LDFLAGS) ./cmd/relithd
@@ -38,6 +48,7 @@ sqlc:
 
 clean:
 	go clean
+	rm -rf bin
 	rm -f coverage.out
 
 coverage:
