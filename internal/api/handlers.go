@@ -25,6 +25,47 @@ func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+func (h *handlers) stats(w http.ResponseWriter, r *http.Request) {
+	stats, err := h.queries.GetStats(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "stats: "+err.Error())
+		return
+	}
+
+	rawMB := float64(stats.TotalRawBytes) / (1024 * 1024)
+	chunkMB := float64(stats.TotalChunkBytes) / (1024 * 1024)
+	var savingsPct float64
+	if stats.TotalRawBytes > 0 {
+		savingsPct = (1 - float64(stats.TotalChunkBytes)/float64(stats.TotalRawBytes)) * 100
+	}
+
+	type resp struct {
+		RepoCount       int64   `json:"repo_count"`
+		DocCount        int64   `json:"doc_count"`
+		ChunkCount      int64   `json:"chunk_count"`
+		TotalRawBytes   int64   `json:"total_raw_bytes"`
+		TotalChunkBytes int64   `json:"total_chunk_bytes"`
+		RawMB           float64 `json:"raw_mb"`
+		ChunkMB         float64 `json:"chunk_mb"`
+		SavingsPct      float64 `json:"savings_pct"`
+		SymbolCount     int64   `json:"symbol_count"`
+		RefCount        int64   `json:"ref_count"`
+	}
+
+	writeJSON(w, http.StatusOK, resp{
+		RepoCount:       stats.RepoCount,
+		DocCount:        stats.DocCount,
+		ChunkCount:      stats.ChunkCount,
+		TotalRawBytes:   stats.TotalRawBytes,
+		TotalChunkBytes: stats.TotalChunkBytes,
+		RawMB:           round2(rawMB),
+		ChunkMB:         round2(chunkMB),
+		SavingsPct:      round2(savingsPct),
+		SymbolCount:     stats.SymbolCount,
+		RefCount:        stats.RefCount,
+	})
+}
+
 func (h *handlers) listRepos(w http.ResponseWriter, r *http.Request) {
 	repos, err := h.queries.ListRepos(r.Context())
 	if err != nil {
@@ -182,6 +223,10 @@ func (h *handlers) content(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(content))
+}
+
+func round2(v float64) float64 {
+	return float64(int64(v*100)) / 100
 }
 
 func (h *handlers) search(w http.ResponseWriter, r *http.Request) {

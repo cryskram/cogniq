@@ -68,3 +68,13 @@ type Symbol struct {
 	Line  int64  `json:"line"`
 	Col   int64  `json:"col"`
 }
+
+type GetStatsRow struct {
+	RepoCount       int64 `json:"repo_count"`
+	DocCount        int64 `json:"doc_count"`
+	ChunkCount      int64 `json:"chunk_count"`
+	TotalRawBytes   int64 `json:"total_raw_bytes"`
+	TotalChunkBytes int64 `json:"total_chunk_bytes"`
+	SymbolCount     int64 `json:"symbol_count"`
+	RefCount        int64 `json:"ref_count"`
+}

@@ -6,10 +6,11 @@ import (
 )
 
 var (
-	goFuncPat   = regexp.MustCompile(`^func\s+(\([^)]*\)\s+)?([A-Za-z_]\w*)`)
-	goTypePat   = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+`)
-	goStructPat = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+struct(\s*\{|\s*//|$)`)
-	goIfacePat  = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+interface(\s*\{|\s*//|$)`)
+	goFuncPat     = regexp.MustCompile(`^func\s+(\([^)]*\)\s+)?([A-Za-z_]\w*)`)
+	goTypePat     = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+`)
+	goStructPat   = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+struct(\s*\{|\s*//|$)`)
+	goIfacePat    = regexp.MustCompile(`^type\s+([A-Za-z_]\w*)(\[[^]]*\])?\s+interface(\s*\{|\s*//|$)`)
+	goVarConstPat = regexp.MustCompile(`^(var|const)\s+`)
 )
 
 func GoChunker(content string) []Chunk {
@@ -20,7 +21,9 @@ func GoChunker(content string) []Chunk {
 
 	var decls []declInfo
 	braceDepth := 0
+	parenDepth := 0
 	inDecl := -1
+	inParenDecl := false
 	inString := false
 	inLineComment := false
 	stringChar := byte(0)
@@ -30,6 +33,7 @@ func GoChunker(content string) []Chunk {
 			return
 		}
 		bb := 0
+		pp := 0
 		for j := 0; j < len(line); j++ {
 			ch := line[j]
 			if ch == '"' || ch == '`' || ch == '\'' {
@@ -48,13 +52,18 @@ func GoChunker(content string) []Chunk {
 			if inString {
 				continue
 			}
-			if ch == '{' {
+			if ch == '(' {
+				pp++
+			} else if ch == ')' {
+				pp--
+			} else if ch == '{' {
 				bb++
 			} else if ch == '}' {
 				bb--
 			}
 		}
 		braceDepth += bb
+		parenDepth += pp
 		if braceDepth < 0 {
 			braceDepth = 0
 		}
@@ -123,14 +132,27 @@ func GoChunker(content string) []Chunk {
 				}
 			}
 			isDecl = true
+		} else if m := goVarConstPat.FindStringSubmatch(trimmed); m != nil {
+			name = m[1]
+			kind = m[1]
+			if m[1] == "var" {
+				kind = "variable"
+			}
+			col = 0
+			isDecl = true
 		}
 
 		if isDecl {
 			if inDecl >= 0 {
-				decls[len(decls)-1].endLine = i
+				if inParenDecl {
+					decls[len(decls)-1].endLine = i
+				} else {
+					decls[len(decls)-1].endLine = i
+				}
 			}
 
 			hasBrace := strings.Contains(rawLine, "{")
+			hasParen := strings.Contains(rawLine, "(") && (kind == "variable" || kind == "const")
 
 			if hasBrace {
 				cBraces := strings.Count(rawLine, "{") - strings.Count(rawLine, "}")
@@ -139,6 +161,7 @@ func GoChunker(content string) []Chunk {
 				} else {
 					braceDepth = 0
 				}
+				inParenDecl = false
 				inDecl = i
 				decls = append(decls, declInfo{
 					line:    i,
@@ -149,9 +172,25 @@ func GoChunker(content string) []Chunk {
 					decls[len(decls)-1].endLine = i + 1
 					inDecl = -1
 				}
+			} else if hasParen {
+				parenDepth = 0
+				updateBraces(rawLine, i)
+				inParenDecl = true
+				inDecl = i
+				decls = append(decls, declInfo{
+					line:    i,
+					endLine: -1,
+					symbols: []Symbol{{Name: name, Kind: kind, Line: i, Col: col}},
+				})
+				if parenDepth == 0 {
+					decls[len(decls)-1].endLine = i + 1
+					inDecl = -1
+					inParenDecl = false
+				}
 			} else {
 				// Check if next line starts with { (type Foo struct\n{)
 				if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "{" {
+					inParenDecl = false
 					inDecl = i
 					braceDepth = 0
 					decls = append(decls, declInfo{
@@ -160,7 +199,7 @@ func GoChunker(content string) []Chunk {
 						symbols: []Symbol{{Name: name, Kind: kind, Line: i, Col: col}},
 					})
 				} else {
-					braceDepth = 0
+					inParenDecl = false
 					inDecl = -1
 					decls = append(decls, declInfo{
 						line:    i,
@@ -168,6 +207,16 @@ func GoChunker(content string) []Chunk {
 						symbols: []Symbol{{Name: name, Kind: kind, Line: i, Col: col}},
 					})
 				}
+			}
+			continue
+		}
+
+		if inParenDecl {
+			updateBraces(rawLine, i)
+			if parenDepth <= 0 {
+				decls[len(decls)-1].endLine = i + 1
+				inDecl = -1
+				inParenDecl = false
 			}
 			continue
 		}
@@ -185,7 +234,7 @@ func GoChunker(content string) []Chunk {
 
 	chunks := buildChunks(lines, decls)
 	if chunks == nil {
-		return lineBasedChunk(content, 50, 10)
+		return lineBasedChunk(content, 50, 0)
 	}
 	return chunks
 }

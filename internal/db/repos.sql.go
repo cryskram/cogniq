@@ -147,6 +147,32 @@ type UpdateRepoStatusParams struct {
 	ID            int64        `json:"id"`
 }
 
+const getStats = `-- name: GetStats :one
+SELECT
+  (SELECT COUNT(*) FROM repositories),
+  (SELECT COUNT(*) FROM documents),
+  (SELECT COUNT(*) FROM chunks),
+  (SELECT COALESCE(SUM(size), 0) FROM documents),
+  (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chunks),
+  (SELECT COUNT(*) FROM symbols),
+  (SELECT COUNT(*) FROM refs)
+`
+
+func (q *Queries) GetStats(ctx context.Context) (GetStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getStats)
+	var i GetStatsRow
+	err := row.Scan(
+		&i.RepoCount,
+		&i.DocCount,
+		&i.ChunkCount,
+		&i.TotalRawBytes,
+		&i.TotalChunkBytes,
+		&i.SymbolCount,
+		&i.RefCount,
+	)
+	return i, err
+}
+
 func (q *Queries) UpdateRepoStatus(ctx context.Context, arg UpdateRepoStatusParams) error {
 	_, err := q.db.ExecContext(ctx, updateRepoStatus,
 		arg.Status,

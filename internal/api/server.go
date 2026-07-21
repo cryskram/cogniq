@@ -34,6 +34,7 @@ func New(database *sql.DB, logger zerolog.Logger, cfg *config.Config) *Server {
 	mux := http.NewServeMux()
 	mux.Handle("GET /", dashboardHandler())
 	mux.HandleFunc("GET /v1/health", h.health)
+	mux.HandleFunc("GET /v1/stats", h.stats)
 	mux.HandleFunc("GET /v1/repos", h.listRepos)
 	mux.HandleFunc("POST /v1/repos", h.createRepo)
 	mux.HandleFunc("GET /v1/repos/{id}", h.getRepo)

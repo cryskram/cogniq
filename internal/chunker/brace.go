@@ -160,7 +160,7 @@ func BraceChunker(content string) []Chunk {
 
 	chunks := buildChunks(lines, decls)
 	if chunks == nil {
-		return lineBasedChunk(content, 50, 10)
+		return lineBasedChunk(content, 50, 0)
 	}
 	return chunks
 }

@@ -33,6 +33,7 @@ type Querier interface {
 	GetChunk(ctx context.Context, id int64) (Chunk, error)
 	GetChunkCountsByRepo(ctx context.Context, repoID int64) ([]GetChunkCountsByRepoRow, error)
 	GetDocument(ctx context.Context, id int64) (Document, error)
+	GetStats(ctx context.Context) (GetStatsRow, error)
 	GetDocumentByPath(ctx context.Context, arg GetDocumentByPathParams) (Document, error)
 	GetRepo(ctx context.Context, id int64) (Repository, error)
 	GetRepoByPath(ctx context.Context, path string) (Repository, error)

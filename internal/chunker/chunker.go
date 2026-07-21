@@ -49,7 +49,7 @@ func ForLanguage(language string) Chunker {
 }
 
 func FallbackChunker(content string) []Chunk {
-	return lineBasedChunk(content, 50, 10)
+	return lineBasedChunk(content, 50, 0)
 }
 
 func lineBasedChunk(content string, chunkSize, overlap int) []Chunk {
@@ -110,7 +110,7 @@ func buildChunks(lines []string, decls []declInfo) []Chunk {
 		return nil
 	}
 
-	// Set end lines for all but the last decl
+	// Close any unclosed decls
 	for i := 0; i < len(decls); i++ {
 		if decls[i].endLine < 0 {
 			if i+1 < len(decls) {
@@ -122,36 +122,13 @@ func buildChunks(lines []string, decls []declInfo) []Chunk {
 	}
 
 	var chunks []Chunk
-	idx := 0
-	pos := 0
-
-	for _, d := range decls {
-		if d.line > pos {
-			chunks = append(chunks, Chunk{
-				Content:   strings.Join(lines[pos:d.line], "\n"),
-				StartLine: pos,
-				EndLine:   d.line - 1,
-				Index:     idx,
-			})
-			idx++
-		}
+	for idx, d := range decls {
 		chunks = append(chunks, Chunk{
 			Content:   strings.Join(lines[d.line:d.endLine], "\n"),
 			StartLine: d.line,
 			EndLine:   d.endLine - 1,
 			Index:     idx,
 			Symbols:   d.symbols,
-		})
-		idx++
-		pos = d.endLine
-	}
-
-	if pos < len(lines) {
-		chunks = append(chunks, Chunk{
-			Content:   strings.Join(lines[pos:], "\n"),
-			StartLine: pos,
-			EndLine:   len(lines) - 1,
-			Index:     idx,
 		})
 	}
 

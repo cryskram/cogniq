@@ -65,6 +65,15 @@ var statusCmd = &cobra.Command{
 		w.Flush()
 
 		fmt.Printf("\nTotals: %d files, %d chunks across %d repositories\n", totalFiles, totalChunks, len(repos))
+
+		stats, err := q.GetStats(context.Background())
+		if err == nil && stats.TotalRawBytes > 0 {
+			rawMB := float64(stats.TotalRawBytes) / (1024 * 1024)
+			chunkMB := float64(stats.TotalChunkBytes) / (1024 * 1024)
+			savings := (1 - float64(stats.TotalChunkBytes)/float64(stats.TotalRawBytes)) * 100
+			fmt.Printf("\n  %d files (%.1f MB raw) → %d chunks (%.1f MB stored)  -  %.1f%% less context than full-file reads\n",
+				stats.DocCount, rawMB, stats.ChunkCount, chunkMB, savings)
+		}
 		return nil
 	},
 }

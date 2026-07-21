@@ -46,6 +46,8 @@ make build-all
 ./bin/relithd
 ```
 
+> **macOS**: If Gatekeeper blocks the downloaded binary, run `xattr -d com.apple.quarantine /path/to/binary` then right-click → Open. This only needs to be done once per file.
+
 ## CLI
 
 | Command | Description |
@@ -92,6 +94,8 @@ Type: command
 Command: D:\relith\bin\relithmcp.exe
 ```
 
+> **macOS**: If Gatekeeper blocks `relithmcp`, run `xattr -d com.apple.quarantine /path/to/relithmcp` first.
+
 **Claude Code** - add to `~/.config/claude/mcp.json`:
 
 ```json
@@ -116,6 +120,7 @@ curl -s -X POST http://127.0.0.1:9876/v1/repos \
 curl -s -X POST http://127.0.0.1:9876/v1/repos/1/index
 curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
 curl -s "http://127.0.0.1:9876/v1/content?repo=my-repo&path=main.go"
+curl -s "http://127.0.0.1:9876/v1/stats"
 ```
 
 | Method | Path | Description |
@@ -129,6 +134,7 @@ curl -s "http://127.0.0.1:9876/v1/content?repo=my-repo&path=main.go"
 | `POST` | `/v1/repos/{id}/index` | Trigger indexing |
 | `GET` | `/v1/search?q=` | Full-text search |
 | `GET` | `/v1/content?repo=&path=` | Get file content by repo name and path |
+| `GET` | `/v1/stats` | Aggregate stats: file/chunk counts, raw vs stored bytes, savings % |
 
 ## Configuration
 

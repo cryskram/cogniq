@@ -33,6 +33,9 @@
       </div>
     </header>
 
+    <!-- Stats Banner -->
+    <div id="stats-banner" class="text-xs text-gray-500 text-center mb-4"></div>
+
     <!-- Repos Section -->
     <section class="mb-8">
       <div class="flex items-center justify-between mb-3">
@@ -146,6 +149,35 @@
       const st = (s || 'unknown').toLowerCase()
       const c = statusStyles[st] || 'bg-gray-500/15 text-gray-400 border-gray-500/25'
       return '<span class="inline-block px-2 py-0.5 text-xs font-medium rounded-md border ' + c + '">' + s + '</span>'
+    }
+
+    // --- Stats ---
+    async function loadStats() {
+      try {
+        const r = await fetch(API + '/v1/stats')
+        if (!r.ok) return
+        const s = await r.json()
+        if (s.repo_count === 0) {
+          $('stats-banner').textContent = ''
+          return
+        }
+        const raw = s.raw_mb.toFixed(1)
+        const chunk = s.chunk_mb.toFixed(1)
+        const pct = s.savings_pct.toFixed(1)
+        $('stats-banner').innerHTML = `
+          <span class="text-gray-400">Relith indexed</span>
+          <span class="text-gray-300 font-medium">${s.doc_count.toLocaleString()}</span>
+          <span class="text-gray-400">files (</span>
+          <span class="text-gray-300">${raw} MB</span>
+          <span class="text-gray-400">raw) into</span>
+          <span class="text-gray-300 font-medium">${s.chunk_count.toLocaleString()}</span>
+          <span class="text-gray-400">chunks (</span>
+          <span class="text-gray-300">${chunk} MB</span>
+          <span class="text-gray-400">) -</span>
+          <span class="text-emerald-400 font-semibold">${pct}% less</span>
+          <span class="text-gray-400">context than full-file reads</span>
+        `
+      } catch {}
     }
 
     // --- Status ---
@@ -390,8 +422,10 @@
     // --- Init ---
     updateStatus()
     loadRepos()
+    loadStats()
     setInterval(updateStatus, 5000)
     setInterval(loadRepos, 5000)
+    setInterval(loadStats, 5000)
   </script>
 </body>
 </html>

@@ -536,9 +536,8 @@ func beta() {
 		t.Errorf("expected at least 2 function symbols, got %d", funcChunks)
 	}
 
-	// The filler between should also be a chunk
-	if len(chunks) < 3 {
-		t.Errorf("expected at least 3 chunks (pkg + alpha + beta), got %d", len(chunks))
+	if len(chunks) < 2 {
+		t.Errorf("expected at least 2 chunks (alpha + beta), got %d", len(chunks))
 	}
 }
 
