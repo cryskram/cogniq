@@ -2,11 +2,10 @@ package indexer
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"hash/fnv"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -71,58 +70,81 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath string, repoID int64
 		existingByPath[doc.Path] = doc
 	}
 
-	visited := sync.Map{}
-
-	concurrency := idx.cfg.Concurrency
-	if concurrency < 1 {
-		concurrency = 1
-	}
-
-	sem := make(chan struct{}, concurrency)
-	var mu sync.Mutex
+	visited := make(map[string]struct{}, len(files))
 	result := IndexResult{}
-	var wg sync.WaitGroup
 
-	for _, fi := range files {
-		fi := fi
-		sem <- struct{}{}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }()
-			visited.Store(fi.RelPath, struct{}{})
+	batchSize := 500
+	for i := 0; i < len(files); i += batchSize {
+		end := i + batchSize
+		if end > len(files) {
+			end = len(files)
+		}
+		batch := files[i:end]
+
+		var work []batchWork
+		for _, fi := range batch {
+			visited[fi.RelPath] = struct{}{}
 
 			existing, exists := existingByPath[fi.RelPath]
-			var existingPtr *db.Document
-			if exists {
-				if existing.Hash == idx.fileHash(ctx, fi.FullPath) {
-					mu.Lock()
-					result.FilesSkipped++
-					mu.Unlock()
-					return
-				}
-				existingPtr = &existing
+			if exists && existing.Hash == fastHashFile(fi.FullPath) {
+				result.FilesSkipped++
+				continue
 			}
 
-			n, err := idx.writeFile(ctx, repoID, fi.RelPath, fi.FullPath, fi.Size, fi.ModTime, existingPtr, nil)
+			content, err := ReadFileContent(fi.FullPath, idx.cfg.MaxFileSize)
 			if err != nil {
-				idx.logger.Error().Err(err).Str("file", fi.RelPath).Msg("processing file")
-				mu.Lock()
+				idx.logger.Error().Err(err).Str("file", fi.RelPath).Msg("read file")
 				result.FilesError++
-				mu.Unlock()
-				return
+				continue
 			}
-			mu.Lock()
-			result.FilesIndexed++
-			result.TotalChunks += n
-			mu.Unlock()
-		}()
+			if content == "" {
+				continue
+			}
+
+			hash := fastHash(content)
+			if exists && existing.Hash == hash {
+				result.FilesSkipped++
+				continue
+			}
+
+			lang := DetectLanguage(fi.RelPath)
+			langChunker := chunker.ForLanguage(lang)
+			var chunks []chunker.Chunk
+			if langChunker != nil {
+				chunks = langChunker(content)
+			}
+			if len(chunks) == 0 {
+				continue
+			}
+
+			work = append(work, batchWork{
+				relPath:  fi.RelPath,
+				fullPath: fi.FullPath,
+				content:  content,
+				hash:     hash,
+				chunks:   chunks,
+				lang:     lang,
+				size:     fi.Size,
+				modTime:  fi.ModTime,
+			})
+		}
+
+		if len(work) == 0 {
+			continue
+		}
+
+		if err := idx.writeBatch(ctx, repoID, work, existingByPath); err != nil {
+			return result, fmt.Errorf("write batch: %w", err)
+		}
+		result.FilesIndexed += len(work)
+		for _, w := range work {
+			result.TotalChunks += len(w.chunks)
+		}
 	}
-	wg.Wait()
 
 	var toDelete []int64
 	for _, doc := range existingDocs {
-		if _, seen := visited.Load(doc.Path); !seen {
+		if _, seen := visited[doc.Path]; !seen {
 			toDelete = append(toDelete, doc.ID)
 		}
 	}
@@ -165,20 +187,127 @@ func (idx *Indexer) IndexFile(ctx context.Context, repoID int64, relPath, fullPa
 	})
 	exists := err == nil
 
+	var existingPtr *db.Document
 	if exists {
-		if existing.Hash == idx.fileHash(ctx, fullPath) {
+		if existing.Hash == fastHashFile(fullPath) {
 			idx.logger.Debug().Str("path", relPath).Msg("file unchanged, skipping")
 			return nil
 		}
-		_, err = idx.writeFile(ctx, repoID, relPath, fullPath, 0, 0, &existing, nil)
-		return err
-	}
-	if err != sql.ErrNoRows {
+		existingPtr = &existing
+	} else if err != sql.ErrNoRows {
 		return fmt.Errorf("get existing doc: %w", err)
 	}
 
-	_, err = idx.writeFile(ctx, repoID, relPath, fullPath, 0, 0, nil, nil)
-	return err
+	content, err := ReadFileContent(fullPath, idx.cfg.MaxFileSize)
+	if err != nil {
+		return fmt.Errorf("read: %w", err)
+	}
+	if content == "" {
+		return nil
+	}
+
+	hash := fastHash(content)
+	if existingPtr != nil && existingPtr.Hash == hash {
+		return nil
+	}
+
+	lang := DetectLanguage(relPath)
+	langChunker := chunker.ForLanguage(lang)
+	var chunks []chunker.Chunk
+	if langChunker != nil {
+		chunks = langChunker(content)
+	}
+	if len(chunks) == 0 {
+		return nil
+	}
+
+	langStr := lang
+	mimeStr := ""
+	if lang != "" {
+		mimeStr = "text/" + lang
+	}
+
+	tx, err := idx.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	qtx := idx.queries().WithTx(tx)
+
+	var docID int64
+	if existingPtr != nil {
+		if err := qtx.UpdateDocument(ctx, db.UpdateDocumentParams{
+			ID:       existingPtr.ID,
+			Size:     int64(len(content)),
+			Hash:     hash,
+			ModTime:  time.Now(),
+			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
+			Language: sql.NullString{String: langStr, Valid: langStr != ""},
+		}); err != nil {
+			return fmt.Errorf("update doc: %w", err)
+		}
+		if err := qtx.DeleteChunksByDoc(ctx, existingPtr.ID); err != nil {
+			return fmt.Errorf("delete chunks: %w", err)
+		}
+		if err := qtx.DeleteSymbolsByDoc(ctx, existingPtr.ID); err != nil {
+			return fmt.Errorf("delete symbols: %w", err)
+		}
+		if err := qtx.DeleteRefsByDoc(ctx, existingPtr.ID); err != nil {
+			return fmt.Errorf("delete refs: %w", err)
+		}
+		docID = existingPtr.ID
+	} else {
+		doc, err := qtx.CreateDocument(ctx, db.CreateDocumentParams{
+			RepoID:   repoID,
+			Path:     relPath,
+			Size:     int64(len(content)),
+			Hash:     hash,
+			ModTime:  time.Now(),
+			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
+			Language: sql.NullString{String: langStr, Valid: langStr != ""},
+		})
+		if err != nil {
+			return fmt.Errorf("create doc: %w", err)
+		}
+		docID = doc.ID
+	}
+
+	for _, c := range chunks {
+		if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
+			DocID:      docID,
+			ChunkIndex: int64(c.Index),
+			Content:    c.Content,
+		}); err != nil {
+			return fmt.Errorf("create chunk: %w", err)
+		}
+		for _, sym := range c.Symbols {
+			if _, err := qtx.CreateSymbol(ctx, db.CreateSymbolParams{
+				DocID: docID,
+				Name:  sym.Name,
+				Kind:  sym.Kind,
+				Line:  int64(sym.Line),
+				Col:   int64(sym.Col),
+			}); err != nil {
+				return fmt.Errorf("create symbol: %w", err)
+			}
+		}
+	}
+
+	refs := ExtractReferences(content)
+	for _, r := range refs {
+		if _, err := qtx.CreateRef(ctx, db.CreateRefParams{
+			DocID:   docID,
+			Name:    r.Name,
+			Line:    int64(r.Line),
+			Col:     int64(r.Col),
+			Context: r.Context,
+		}); err != nil {
+			return fmt.Errorf("create ref: %w", err)
+		}
+	}
+
+	return tx.Commit()
 }
 
 func (idx *Indexer) DeleteFile(ctx context.Context, repoID int64, relPath string) error {
@@ -207,146 +336,127 @@ func (idx *Indexer) DeleteFile(ctx context.Context, repoID int64, relPath string
 	return nil
 }
 
-func (idx *Indexer) fileHash(ctx context.Context, fullPath string) string {
-	data, err := os.ReadFile(fullPath)
+func fastHash(content string) string {
+	h := fnv.New64a()
+	h.Write([]byte(content))
+	return fmt.Sprintf("%016x", h.Sum(nil))
+}
+
+func fastHashFile(path string) string {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
 	}
-	return fmt.Sprintf("%x", sha256.Sum256(data))
+	return fastHash(string(data))
 }
 
-func (idx *Indexer) writeFile(
+type batchWork struct {
+	relPath  string
+	fullPath string
+	content  string
+	hash     string
+	chunks   []chunker.Chunk
+	lang     string
+	size     int64
+	modTime  int64
+}
+
+func (idx *Indexer) writeBatch(
 	ctx context.Context,
 	repoID int64,
-	relPath, fullPath string,
-	size, modTime int64,
-	existing *db.Document,
-	result *IndexResult,
-) (int, error) {
-	if size <= 0 {
-		info, err := os.Stat(fullPath)
-		if err != nil {
-			return 0, fmt.Errorf("stat: %w", err)
-		}
-		size = info.Size()
-		modTime = info.ModTime().Unix()
-	}
-
-	content, err := ReadFileContent(fullPath, idx.cfg.MaxFileSize)
-	if err != nil {
-		return 0, fmt.Errorf("read: %w", err)
-	}
-	if content == "" {
-		return 0, nil
-	}
-
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(content)))
-
-	if existing != nil && existing.Hash == hash {
-		return 0, nil
-	}
-
-	lang := DetectLanguage(relPath)
-	mimeStr := ""
-	if lang != "" {
-		mimeStr = "text/" + lang
-	}
-	langStr := lang
-
-	var chunks []chunker.Chunk
-	langChunker := chunker.ForLanguage(lang)
-	if langChunker != nil {
-		chunks = langChunker(content)
-	}
-	if len(chunks) == 0 {
-		return 0, nil
-	}
-
+	work []batchWork,
+	existingByPath map[string]db.Document,
+) error {
 	tx, err := idx.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
+		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
 
 	qtx := idx.queries().WithTx(tx)
 
-	var docID int64
-	if existing != nil {
-		if err := qtx.UpdateDocument(ctx, db.UpdateDocumentParams{
-			ID:       existing.ID,
-			Size:     size,
-			Hash:     hash,
-			ModTime:  time.Unix(modTime, 0),
-			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
-			Language: sql.NullString{String: langStr, Valid: langStr != ""},
-		}); err != nil {
-			return 0, fmt.Errorf("update doc: %w", err)
-		}
-		if err := qtx.DeleteChunksByDoc(ctx, existing.ID); err != nil {
-			return 0, fmt.Errorf("delete chunks: %w", err)
-		}
-		if err := qtx.DeleteSymbolsByDoc(ctx, existing.ID); err != nil {
-			return 0, fmt.Errorf("delete symbols: %w", err)
-		}
-		if err := qtx.DeleteRefsByDoc(ctx, existing.ID); err != nil {
-			return 0, fmt.Errorf("delete refs: %w", err)
-		}
-		docID = existing.ID
-	} else {
-		doc, err := qtx.CreateDocument(ctx, db.CreateDocumentParams{
-			RepoID:   repoID,
-			Path:     relPath,
-			Size:     size,
-			Hash:     hash,
-			ModTime:  time.Unix(modTime, 0),
-			MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
-			Language: sql.NullString{String: langStr, Valid: langStr != ""},
-		})
-		if err != nil {
-			return 0, fmt.Errorf("create doc: %w", err)
-		}
-		docID = doc.ID
-	}
+	for _, w := range work {
+		existing := existingByPath[w.relPath]
 
-	for _, c := range chunks {
-		if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
-			DocID:      docID,
-			ChunkIndex: int64(c.Index),
-			Content:    c.Content,
-		}); err != nil {
-			return 0, fmt.Errorf("create chunk: %w", err)
+		mimeStr := ""
+		if w.lang != "" {
+			mimeStr = "text/" + w.lang
 		}
-		for _, sym := range c.Symbols {
-			if _, err := qtx.CreateSymbol(ctx, db.CreateSymbolParams{
-				DocID: docID,
-				Name:  sym.Name,
-				Kind:  sym.Kind,
-				Line:  int64(sym.Line),
-				Col:   int64(sym.Col),
+
+		var docID int64
+		if existing.Path != "" {
+			if err := qtx.UpdateDocument(ctx, db.UpdateDocumentParams{
+				ID:       existing.ID,
+				Size:     w.size,
+				Hash:     w.hash,
+				ModTime:  time.Unix(w.modTime, 0),
+				MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
+				Language: sql.NullString{String: w.lang, Valid: w.lang != ""},
 			}); err != nil {
-				return 0, fmt.Errorf("create symbol: %w", err)
+				return fmt.Errorf("update doc %s: %w", w.relPath, err)
+			}
+			if err := qtx.DeleteChunksByDoc(ctx, existing.ID); err != nil {
+				return fmt.Errorf("delete chunks %s: %w", w.relPath, err)
+			}
+			if err := qtx.DeleteSymbolsByDoc(ctx, existing.ID); err != nil {
+				return fmt.Errorf("delete symbols %s: %w", w.relPath, err)
+			}
+			if err := qtx.DeleteRefsByDoc(ctx, existing.ID); err != nil {
+				return fmt.Errorf("delete refs %s: %w", w.relPath, err)
+			}
+			docID = existing.ID
+		} else {
+			doc, err := qtx.CreateDocument(ctx, db.CreateDocumentParams{
+				RepoID:   repoID,
+				Path:     w.relPath,
+				Size:     w.size,
+				Hash:     w.hash,
+				ModTime:  time.Unix(w.modTime, 0),
+				MimeType: sql.NullString{String: mimeStr, Valid: mimeStr != ""},
+				Language: sql.NullString{String: w.lang, Valid: w.lang != ""},
+			})
+			if err != nil {
+				return fmt.Errorf("create doc %s: %w", w.relPath, err)
+			}
+			docID = doc.ID
+		}
+
+		for _, c := range w.chunks {
+			if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
+				DocID:      docID,
+				ChunkIndex: int64(c.Index),
+				Content:    c.Content,
+			}); err != nil {
+				return fmt.Errorf("create chunk %s: %w", w.relPath, err)
+			}
+			for _, sym := range c.Symbols {
+				if _, err := qtx.CreateSymbol(ctx, db.CreateSymbolParams{
+					DocID: docID,
+					Name:  sym.Name,
+					Kind:  sym.Kind,
+					Line:  int64(sym.Line),
+					Col:   int64(sym.Col),
+				}); err != nil {
+					return fmt.Errorf("create symbol %s: %w", w.relPath, err)
+				}
+			}
+		}
+
+		refs := ExtractReferences(w.content)
+		for _, r := range refs {
+			if _, err := qtx.CreateRef(ctx, db.CreateRefParams{
+				DocID:   docID,
+				Name:    r.Name,
+				Line:    int64(r.Line),
+				Col:     int64(r.Col),
+				Context: r.Context,
+			}); err != nil {
+				return fmt.Errorf("create ref %s: %w", w.relPath, err)
 			}
 		}
 	}
 
-	refs := ExtractReferences(content)
-	for _, r := range refs {
-		if _, err := qtx.CreateRef(ctx, db.CreateRefParams{
-			DocID:   docID,
-			Name:    r.Name,
-			Line:    int64(r.Line),
-			Col:     int64(r.Col),
-			Context: r.Context,
-		}); err != nil {
-			return 0, fmt.Errorf("create ref: %w", err)
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("commit tx: %w", err)
-	}
-
-	return len(chunks), nil
+	return tx.Commit()
 }
 
 func IsGitRepo(path string) bool {

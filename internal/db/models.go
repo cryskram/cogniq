@@ -69,6 +69,14 @@ type Symbol struct {
 	Col   int64  `json:"col"`
 }
 
+type GetGraphEdgesRow struct {
+	SourceID   int64  `json:"source_id"`
+	SourcePath string `json:"source_path"`
+	TargetID   int64  `json:"target_id"`
+	TargetPath string `json:"target_path"`
+	Weight     int64  `json:"weight"`
+}
+
 type GetStatsRow struct {
 	RepoCount       int64 `json:"repo_count"`
 	DocCount        int64 `json:"doc_count"`

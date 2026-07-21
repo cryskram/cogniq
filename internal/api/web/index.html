@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Relith Dashboard</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
   <script>
     tailwind.config = {
       theme: {
@@ -36,8 +37,15 @@
     <!-- Stats Banner -->
     <div id="stats-banner" class="text-xs text-gray-500 text-center mb-4"></div>
 
+    <!-- Tabs -->
+    <div class="flex gap-4 mb-6 border-b border-gray-800">
+      <button class="tab-btn text-sm py-2 px-1 border-b-2 border-relith text-gray-200 font-medium" data-tab="repos" onclick="switchTab('repos')">Repos</button>
+      <button class="tab-btn text-sm py-2 px-1 border-b-2 border-transparent text-gray-500 hover:text-gray-300" data-tab="search" onclick="switchTab('search')">Search</button>
+      <button class="tab-btn text-sm py-2 px-1 border-b-2 border-transparent text-gray-500 hover:text-gray-300" data-tab="graph" onclick="switchTab('graph')">Graph</button>
+    </div>
+
     <!-- Repos Section -->
-    <section class="mb-8">
+    <section id="tab-repos" class="mb-8">
       <div class="flex items-center justify-between mb-3">
         <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Repositories</h2>
         <span id="repo-count" class="text-xs text-gray-600"></span>
@@ -50,7 +58,7 @@
     </section>
 
     <!-- Search Section -->
-    <section>
+    <section id="tab-search" class="hidden mb-8">
       <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Search</h2>
       <div class="flex gap-2 mb-3">
         <input id="search-input" type="text" placeholder="Search across all indexed code..."
@@ -61,6 +69,22 @@
       <div id="search-results" class="space-y-2"></div>
       <div id="search-empty" class="text-center py-12 text-gray-600 text-sm">
         Enter a query to search code across all your repositories
+      </div>
+    </section>
+
+    <!-- Graph Section -->
+    <section id="tab-graph" class="hidden mb-8">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-semibold text-gray-300 uppercase tracking-wider">Knowledge Graph</h2>
+        <select id="graph-repo" onchange="loadGraph()" class="text-xs bg-gray-900 border border-gray-700 rounded px-2 py-1 text-gray-300">
+          <option value="">All repos</option>
+        </select>
+      </div>
+      <div id="graph-container" class="bg-gray-900/60 border border-gray-800 rounded-xl overflow-hidden" style="height:500px">
+        <svg id="graph-svg" width="100%" height="100%"></svg>
+      </div>
+      <div id="graph-empty" class="text-center py-12 text-gray-600 text-sm hidden">
+        No cross-file references found. Index some code first.
       </div>
     </section>
 
@@ -212,6 +236,11 @@
         return
       }
       $('repo-empty').classList.add('hidden')
+
+      // Populate graph repo filter
+      const sel = $('graph-repo')
+      const currentVal = sel.value
+      sel.innerHTML = '<option value="">All repos</option>' + repos.map(r => '<option value="' + escapeHtml(r.name) + '"' + (r.name === currentVal ? ' selected' : '') + '>' + escapeHtml(r.name) + '</option>').join('')
 
       $('repo-list').innerHTML = repos.map(r => {
         const badge = statusBadge(r.status)
@@ -418,6 +447,151 @@
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape') { closeModal(); closeConfirm() }
     })
+
+    // --- Tabs ---
+    function switchTab(name) {
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        if (b.dataset.tab === name) {
+          b.className = 'tab-btn text-sm py-2 px-1 border-b-2 border-relith text-gray-200 font-medium'
+        } else {
+          b.className = 'tab-btn text-sm py-2 px-1 border-b-2 border-transparent text-gray-500 hover:text-gray-300'
+        }
+      })
+      document.querySelectorAll('[id^="tab-"]').forEach(s => s.classList.add('hidden'))
+      const section = document.getElementById('tab-' + name)
+      if (section) section.classList.remove('hidden')
+      if (name === 'graph') loadGraph()
+    }
+
+    // --- Graph ---
+    let graphSimulation = null
+
+    async function loadGraph() {
+      const sel = $('graph-repo')
+      const repo = sel.value
+      const url = API + '/v1/graph' + (repo ? '?repo=' + encodeURIComponent(repo) : '')
+      try {
+        const r = await fetch(url)
+        const data = await r.json()
+        if (data.error) {
+          $('graph-empty').classList.remove('hidden')
+          $('graph-empty').textContent = 'Error: ' + data.error
+          $('graph-container').classList.add('hidden')
+          return
+        }
+        renderGraph(data.nodes, data.edges)
+      } catch (e) {
+        $('graph-empty').classList.remove('hidden')
+        $('graph-empty').textContent = 'Error: ' + e.message
+        $('graph-container').classList.add('hidden')
+      }
+    }
+
+    function renderGraph(nodes, edges) {
+      const container = $('graph-container')
+      const empty = $('graph-empty')
+      const svg = $('graph-svg')
+
+      if (!nodes || nodes.length < 2) {
+        container.classList.add('hidden')
+        empty.classList.remove('hidden')
+        empty.textContent = 'Not enough connections to build a graph. Index more code.'
+        return
+      }
+      container.classList.remove('hidden')
+      empty.classList.add('hidden')
+
+      if (graphSimulation) graphSimulation.stop()
+
+      svg.innerHTML = ''
+      const width = container.clientWidth || 800
+      const height = container.clientHeight || 500
+
+      const g = d3.select(svg)
+      const repoColors = d3.scaleOrdinal(d3.schemeCategory10)
+
+      // Zoom
+      const zoomG = g.append('g')
+      const zoom = d3.zoom()
+        .scaleExtent([0.1, 4])
+        .on('zoom', (event) => zoomG.attr('transform', event.transform))
+      g.call(zoom)
+      g.on('dblclick.zoom', null)
+
+      // Build simulation
+      graphSimulation = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(edges).id(d => d.id).distance(60))
+        .force('charge', d3.forceManyBody().strength(-150))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('collision', d3.forceCollide().radius(d => d.group === 'repo' ? 30 : 15))
+        .alphaDecay(0.02)
+
+      // Links
+      const link = zoomG.append('g')
+        .selectAll('line')
+        .data(edges)
+        .join('line')
+        .attr('stroke', '#4b5563')
+        .attr('stroke-opacity', 0.25)
+        .attr('stroke-width', d => Math.min(Math.sqrt(d.weight), 3))
+
+      // Nodes
+      const node = zoomG.append('g')
+        .selectAll('circle')
+        .data(nodes)
+        .join('circle')
+        .attr('r', d => d.group === 'repo' ? 12 : Math.min(3 + d.size * 0.5, 10))
+        .attr('fill', d => d.group === 'repo' ? '#f97316' : repoColors(String(d.repo_id)))
+        .attr('stroke', '#111827')
+        .attr('stroke-width', 1.5)
+        .attr('cursor', 'grab')
+        .call(d3.drag()
+          .on('start', (event, d) => {
+            if (!event.active) graphSimulation.alphaTarget(0.3).restart()
+            d.fx = d.x
+            d.fy = d.y
+          })
+          .on('drag', (event, d) => {
+            d.fx = event.x
+            d.fy = event.y
+          })
+          .on('end', (event, d) => {
+            if (!event.active) graphSimulation.alphaTarget(0)
+            d.fx = null
+            d.fy = null
+          }))
+
+      node.append('title').text(d => d.label)
+
+      // Labels (with stroke halo for legibility)
+      const label = zoomG.append('g')
+        .selectAll('text')
+        .data(nodes)
+        .join('text')
+        .text(d => d.group === 'repo' ? d.label : d.label.replace(/^.*[/\\]/, ''))
+        .attr('font-size', d => d.group === 'repo' ? 12 : 9)
+        .attr('font-family', 'monospace')
+        .attr('fill', d => d.group === 'repo' ? '#f97316' : '#d1d5db')
+        .attr('stroke', '#111827')
+        .attr('stroke-width', 3)
+        .attr('stroke-linejoin', 'round')
+        .attr('paint-order', 'stroke')
+        .attr('pointer-events', 'none')
+
+      graphSimulation.on('tick', () => {
+        link
+          .attr('x1', d => d.source.x)
+          .attr('y1', d => d.source.y)
+          .attr('x2', d => d.target.x)
+          .attr('y2', d => d.target.y)
+        node
+          .attr('cx', d => d.x)
+          .attr('cy', d => d.y)
+        label
+          .attr('x', d => d.x + (d.group === 'repo' ? 16 : 8))
+          .attr('y', d => d.y + 4)
+      })
+    }
 
     // --- Init ---
     updateStatus()

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -64,6 +65,195 @@ func (h *handlers) stats(w http.ResponseWriter, r *http.Request) {
 		SymbolCount:     stats.SymbolCount,
 		RefCount:        stats.RefCount,
 	})
+}
+
+func (h *handlers) graph(w http.ResponseWriter, r *http.Request) {
+	repoName := r.URL.Query().Get("repo")
+
+	repos, err := h.queries.ListRepos(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "list repos: "+err.Error())
+		return
+	}
+
+	var repoID int64
+	if repoName != "" {
+		found := false
+		for _, rp := range repos {
+			if rp.Name == repoName {
+				repoID = rp.ID
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeError(w, http.StatusNotFound, "repo not found: "+repoName)
+			return
+		}
+	}
+
+	nodes, edges, err := h.buildGraph(r.Context(), repos, repoID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "graph: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": nodes,
+		"edges": edges,
+	})
+}
+
+type graphNode struct {
+	ID     int64  `json:"id"`
+	Label  string `json:"label"`
+	Group  string `json:"group"`
+	RepoID int64  `json:"repo_id"`
+	Size   int    `json:"size"`
+}
+
+type graphEdge struct {
+	Source int64 `json:"source"`
+	Target int64 `json:"target"`
+	Weight int64 `json:"weight"`
+}
+
+func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filterRepoID int64) ([]graphNode, []graphEdge, error) {
+	var allNodes []graphNode
+	var allEdges []graphEdge
+	seenNodes := map[int64]bool{}
+	docPaths := map[int64]string{}
+	nodeDegree := map[int64]int{}
+
+	// First pass: collect all paths and degrees
+	for _, r := range repos {
+		if filterRepoID > 0 && r.ID != filterRepoID {
+			continue
+		}
+		edges, err := h.queries.GetGraphEdges(ctx, r.ID)
+		if err != nil {
+			return nil, nil, fmt.Errorf("graph edges for repo %s: %w", r.Name, err)
+		}
+		for _, e := range edges {
+			docPaths[e.SourceID] = e.SourcePath
+			docPaths[e.TargetID] = e.TargetPath
+			nodeDegree[e.SourceID]++
+			nodeDegree[e.TargetID]++
+		}
+	}
+
+	// Trim paths
+	trim := func(s string, n int) string {
+		if len(s) > n {
+			return "..." + s[len(s)-n+3:]
+		}
+		return s
+	}
+	for id, p := range docPaths {
+		docPaths[id] = trim(p, 30)
+	}
+
+	// Limit to top 80 file nodes by degree
+	type kv struct {
+		id  int64
+		deg int
+	}
+	var sorted []kv
+	for id, deg := range nodeDegree {
+		sorted = append(sorted, kv{id, deg})
+	}
+	for i := 0; i < len(sorted); i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[j].deg > sorted[i].deg {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	if len(sorted) > 80 {
+		sorted = sorted[:80]
+	}
+	keepFile := map[int64]bool{}
+	for _, kv := range sorted {
+		keepFile[kv.id] = true
+	}
+
+	// Second pass: build repo nodes and add edges for kept files
+	for _, r := range repos {
+		if filterRepoID > 0 && r.ID != filterRepoID {
+			continue
+		}
+		edges, err := h.queries.GetGraphEdges(ctx, r.ID)
+		if err != nil {
+			continue
+		}
+		if len(edges) == 0 {
+			continue
+		}
+
+		// Filter edges to kept files
+		var localEdges []graphEdge
+		localFileIDs := map[int64]bool{}
+		for _, e := range edges {
+			if !keepFile[e.SourceID] || !keepFile[e.TargetID] {
+				continue
+			}
+			localEdges = append(localEdges, graphEdge{
+				Source: e.SourceID,
+				Target: e.TargetID,
+				Weight: e.Weight,
+			})
+			localFileIDs[e.SourceID] = true
+			localFileIDs[e.TargetID] = true
+		}
+		if len(localEdges) == 0 {
+			continue
+		}
+
+		// Repo node
+		if !seenNodes[-r.ID] {
+			allNodes = append(allNodes, graphNode{
+				ID:     -r.ID,
+				Label:  r.Name,
+				Group:  "repo",
+				RepoID: r.ID,
+				Size:   3,
+			})
+			seenNodes[-r.ID] = true
+		}
+
+		// File nodes
+		for id := range localFileIDs {
+			if seenNodes[id] {
+				continue
+			}
+			allNodes = append(allNodes, graphNode{
+				ID:     id,
+				Label:  docPaths[id],
+				Group:  "file",
+				RepoID: r.ID,
+				Size:   nodeDegree[id],
+			})
+			seenNodes[id] = true
+		}
+
+		allEdges = append(allEdges, localEdges...)
+
+		// Link files to repo
+		for id := range localFileIDs {
+			allEdges = append(allEdges, graphEdge{
+				Source: id,
+				Target: -r.ID,
+				Weight: 1,
+			})
+		}
+	}
+
+	if allNodes == nil {
+		allNodes = []graphNode{}
+	}
+	if allEdges == nil {
+		allEdges = []graphEdge{}
+	}
+	return allNodes, allEdges, nil
 }
 
 func (h *handlers) listRepos(w http.ResponseWriter, r *http.Request) {

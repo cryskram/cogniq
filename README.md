@@ -54,8 +54,9 @@ make build-all
 |---------|-------------|
 | `relith repo add <path>` | Register a repository for indexing |
 | `relith repo list` | List all indexed repositories |
-| `relith repo remove <id-or-name>` | Remove a repository and all its data |
+| `relith repo remove <id-or-name>` | Remove a repository and all its data (auto-VACUUM if >20% free pages) |
 | `relith index [path]` | Index a repo (or all pending) |
+| `relith db vacuum` | Reclaim unused database space from deleted rows and free pages |
 | `relith search <query>` | Full-text search across all indexed code |
 | `relith serve` | Start the daemon (REST API + dashboard + file watcher) |
 | `relith status` | Show indexing status with file/chunk counts |
@@ -121,6 +122,7 @@ curl -s -X POST http://127.0.0.1:9876/v1/repos/1/index
 curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
 curl -s "http://127.0.0.1:9876/v1/content?repo=my-repo&path=main.go"
 curl -s "http://127.0.0.1:9876/v1/stats"
+curl -s "http://127.0.0.1:9876/v1/graph?repo=my-repo"
 ```
 
 | Method | Path | Description |
@@ -135,6 +137,7 @@ curl -s "http://127.0.0.1:9876/v1/stats"
 | `GET` | `/v1/search?q=` | Full-text search |
 | `GET` | `/v1/content?repo=&path=` | Get file content by repo name and path |
 | `GET` | `/v1/stats` | Aggregate stats: file/chunk counts, raw vs stored bytes, savings % |
+| `GET` | `/v1/graph?repo=` | Knowledge graph data: cross-file reference nodes and edges |
 
 ## Configuration
 

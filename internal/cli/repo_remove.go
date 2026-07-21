@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"os"
 	"strconv"
 
 	"github.com/spf13/cobra"
@@ -34,6 +36,7 @@ var repoRemoveCmd = &cobra.Command{
 					return fmt.Errorf("delete repo: %w", err)
 				}
 				fmt.Printf("Removed repository: id=%d  name=%s  path=%s\n", repo.ID, repo.Name, repo.Path)
+				vacuumIfNeeded(app.db)
 				return nil
 			}
 		}
@@ -50,12 +53,32 @@ var repoRemoveCmd = &cobra.Command{
 					return fmt.Errorf("delete repo: %w", err)
 				}
 				fmt.Printf("Removed repository: id=%d  name=%s  path=%s\n", r.ID, r.Name, r.Path)
+				vacuumIfNeeded(app.db)
 				return nil
 			}
 		}
 
 		return fmt.Errorf("repository not found: %s", arg)
 	},
+}
+
+func vacuumIfNeeded(database *sql.DB) {
+	var pageCount, freelistCount int
+	ctx := context.Background()
+	database.QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount)
+	database.QueryRowContext(ctx, "PRAGMA freelist_count").Scan(&freelistCount)
+	if pageCount == 0 {
+		return
+	}
+	freeRatio := float64(freelistCount) / float64(pageCount)
+	if freeRatio > 0.2 {
+		fmt.Printf("Free pages: %.0f%% of database. Running VACUUM to reclaim space...\n", freeRatio*100)
+		if _, err := database.ExecContext(ctx, "VACUUM"); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: VACUUM failed: %v\n", err)
+			return
+		}
+		fmt.Println("VACUUM complete.")
+	}
 }
 
 func init() {

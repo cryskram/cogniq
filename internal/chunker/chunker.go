@@ -20,7 +20,7 @@ type Chunk struct {
 type Chunker func(content string) []Chunk
 
 var registry = map[string]Chunker{
-	"Go":          GoChunker,
+	"Go":          GoChunkerAST,
 	"Python":      PythonChunker,
 	"JavaScript":  BraceChunker,
 	"TypeScript":  BraceChunker,
