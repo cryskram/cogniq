@@ -74,6 +74,8 @@ func (s *Server) registerTools() {
 	s.tools["find_references"] = s.handleFindReferences
 	s.tools["trace_context"] = s.handleTraceContext
 	s.tools["get_file_outline"] = s.handleGetFileOutline
+	s.tools["get_symbol_definition"] = s.handleGetSymbolDefinition
+	s.tools["find_callees"] = s.handleFindCallees
 	s.tools["find_callers"] = s.handleFindCallers
 	s.tools["get_related_files"] = s.handleGetRelatedFiles
 	s.tools["list_hub_files"] = s.handleListHubFiles
@@ -256,6 +258,33 @@ func (s *Server) handleToolsList(ctx context.Context, req JSONRPCRequest) {
 					"path": {"type": "string", "description": "File path relative to repository root"}
 				},
 				"required": ["repo_name", "path"]
+			}`),
+		},
+		{
+			Name:        "get_symbol_definition",
+			Description: "Find the exact definition of a symbol and return its repo, file, kind, and snippet.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Exact symbol name"},
+					"repo_name": {"type": "string", "description": "Optional repository filter"},
+					"kind": {"type": "string", "description": "Optional symbol kind filter"},
+					"max_results": {"type": "integer", "description": "Maximum definitions to return (default 10)", "default": 10}
+				},
+				"required": ["name"]
+			}`),
+		},
+		{
+			Name:        "find_callees",
+			Description: "Find likely callees used inside the definition file for a symbol, useful for following execution flow.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"name": {"type": "string", "description": "Exact symbol name"},
+					"repo_name": {"type": "string", "description": "Optional repository filter"},
+					"max_results": {"type": "integer", "description": "Maximum callees to return (default 15)", "default": 15}
+				},
+				"required": ["name"]
 			}`),
 		},
 		{

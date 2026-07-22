@@ -94,6 +94,12 @@ type EdgeHit struct {
 	Weight      int64  `json:"weight"`
 }
 
+type docCandidate struct {
+	DocID   int64
+	Score   float64
+	Reasons []string
+}
+
 func New(database *sql.DB, logger zerolog.Logger, searcher *search.Searcher) *Engine {
 	return &Engine{db: database, queries: db.New(database), search: searcher, log: logger}
 }
@@ -111,19 +117,11 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 		maxResults = 20
 	}
 
-	bundle := TraceBundle{Query: q, RepoName: req.RepoName, FocusTerms: extractTerms(q)}
-	if len(bundle.FocusTerms) == 0 {
-		bundle.FocusTerms = []string{q}
+	focusTerms := extractTerms(q)
+	if len(focusTerms) == 0 {
+		focusTerms = []string{q}
 	}
-
-	hits, err := e.search.Search(ctx, q, maxResults)
-	if err != nil {
-		return bundle, fmt.Errorf("search: %w", err)
-	}
-	if req.RepoName != "" {
-		hits = filterSearchHits(hits, req.RepoName)
-	}
-	bundle.SearchHits = hits
+	bundle := TraceBundle{Query: q, RepoName: req.RepoName, FocusTerms: focusTerms}
 
 	repos, err := e.queries.ListRepos(ctx)
 	if err != nil {
@@ -136,21 +134,31 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 		repoByName[r.Name] = r
 	}
 
-	seedScores := map[int64]float64{}
-	seedReasons := map[int64][]string{}
+	searchHits, err := e.collectSearchHits(ctx, q, focusTerms, maxResults, req.RepoName)
+	if err != nil {
+		return bundle, fmt.Errorf("search: %w", err)
+	}
+	bundle.SearchHits = searchHits
+
+	candidates := map[int64]*docCandidate{}
 	seedRepos := map[int64]bool{}
-	markSeed := func(docID int64, score float64, reason string) {
-		seedScores[docID] += score
-		seedReasons[docID] = append(seedReasons[docID], reason)
+	markCandidate := func(docID int64, score float64, reason string) {
+		cand := candidates[docID]
+		if cand == nil {
+			cand = &docCandidate{DocID: docID}
+			candidates[docID] = cand
+		}
+		cand.Score += score
+		cand.Reasons = appendUniqueReason(cand.Reasons, reason)
 	}
 
-	for _, h := range hits {
-		markSeed(h.DocumentID, h.Score, "search match")
+	for _, h := range searchHits {
+		markCandidate(h.DocumentID, 6.0+h.Score/10.0, "fts match")
 	}
 
 	var symbolHits []SymbolHit
 	var refHits []RefHit
-	for _, term := range bundle.FocusTerms {
+	for _, term := range focusTerms {
 		var symRowsName []db.FindSymbolsByNameRow
 		var symRowsRepo []db.FindSymbolsByRepoRow
 		var refRowsName []db.FindRefsByNameRow
@@ -187,7 +195,7 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 				Path: row.Path, RepoName: row.RepoName, Line: row.Line, Col: row.Col,
 				Reason: fmt.Sprintf("symbol prefix %q", term),
 			})
-			markSeed(row.DocID, 1.5, "symbol match")
+			markCandidate(row.DocID, 4.5, "symbol match")
 			if repo, ok := repoByName[row.RepoName]; ok {
 				seedRepos[repo.ID] = true
 			}
@@ -199,7 +207,7 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 				RepoName: row.RepoName, Line: row.Line, Col: row.Col, Context: row.Context,
 				Reason: fmt.Sprintf("reference prefix %q", term),
 			})
-			markSeed(row.DocID, 1.0, "reference match")
+			markCandidate(row.DocID, 2.8, "reference match")
 			if repo, ok := repoByName[row.RepoName]; ok {
 				seedRepos[repo.ID] = true
 			}
@@ -210,7 +218,7 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 				Path: row.Path, RepoName: row.RepoName, Line: row.Line, Col: row.Col,
 				Reason: fmt.Sprintf("symbol prefix %q", term),
 			})
-			markSeed(row.DocID, 1.5, "symbol match")
+			markCandidate(row.DocID, 4.5, "symbol match")
 			if repo, ok := repoByName[row.RepoName]; ok {
 				seedRepos[repo.ID] = true
 			}
@@ -221,7 +229,7 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 				RepoName: row.RepoName, Line: row.Line, Col: row.Col, Context: row.Context,
 				Reason: fmt.Sprintf("reference prefix %q", term),
 			})
-			markSeed(row.DocID, 1.0, "reference match")
+			markCandidate(row.DocID, 2.8, "reference match")
 			if repo, ok := repoByName[row.RepoName]; ok {
 				seedRepos[repo.ID] = true
 			}
@@ -233,17 +241,22 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 			seedRepos[repo.ID] = true
 		}
 	}
+	for docID := range candidates {
+		doc, err := e.queries.GetDocument(ctx, docID)
+		if err != nil {
+			continue
+		}
+		seedRepos[doc.RepoID] = true
+	}
 
 	seedDocs := map[int64]bool{}
-	for docID := range seedScores {
+	for docID := range candidates {
 		seedDocs[docID] = true
 	}
 
-	relatedScores := map[int64]float64{}
-	relatedReasons := map[int64][]string{}
-	for docID, score := range seedScores {
-		relatedScores[docID] += score
-		relatedReasons[docID] = appendUniqueReason(relatedReasons[docID], seedReasons[docID]...)
+	relatedScores := map[int64]*docCandidate{}
+	for docID, cand := range candidates {
+		relatedScores[docID] = &docCandidate{DocID: docID, Score: cand.Score, Reasons: append([]string{}, cand.Reasons...)}
 	}
 
 	relatedEdges := map[string]EdgeHit{}
@@ -256,10 +269,16 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 			if !seedDocs[edge.SourceID] && !seedDocs[edge.TargetID] {
 				continue
 			}
-			relatedScores[edge.SourceID] += float64(edge.Weight)
-			relatedScores[edge.TargetID] += float64(edge.Weight)
-			relatedReasons[edge.SourceID] = appendUniqueReason(relatedReasons[edge.SourceID], "graph neighbor")
-			relatedReasons[edge.TargetID] = appendUniqueReason(relatedReasons[edge.TargetID], "graph neighbor")
+			if relatedScores[edge.SourceID] == nil {
+				relatedScores[edge.SourceID] = &docCandidate{DocID: edge.SourceID}
+			}
+			if relatedScores[edge.TargetID] == nil {
+				relatedScores[edge.TargetID] = &docCandidate{DocID: edge.TargetID}
+			}
+			relatedScores[edge.SourceID].Score += float64(edge.Weight) * 0.8
+			relatedScores[edge.TargetID].Score += float64(edge.Weight) * 0.8
+			relatedScores[edge.SourceID].Reasons = appendUniqueReason(relatedScores[edge.SourceID].Reasons, "graph neighbor")
+			relatedScores[edge.TargetID].Reasons = appendUniqueReason(relatedScores[edge.TargetID].Reasons, "graph neighbor")
 			key := fmt.Sprintf("%d:%d", edge.SourceID, edge.TargetID)
 			relatedEdges[key] = EdgeHit{
 				SourceDocID: edge.SourceID,
@@ -276,8 +295,8 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 		score float64
 	}
 	var docOrder []scoredDoc
-	for docID, score := range relatedScores {
-		docOrder = append(docOrder, scoredDoc{docID: docID, score: score})
+	for docID, cand := range relatedScores {
+		docOrder = append(docOrder, scoredDoc{docID: docID, score: cand.Score})
 	}
 	sort.Slice(docOrder, func(i, j int) bool {
 		if docOrder[i].score == docOrder[j].score {
@@ -299,9 +318,10 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 		if err != nil {
 			continue
 		}
+		cand := relatedScores[doc.ID]
 		bundle.RelatedFiles = append(bundle.RelatedFiles, FileHit{
 			DocID: doc.ID, RepoName: repo.Name, Path: doc.Path, Language: doc.Language.String,
-			Score: round2(item.score), Reason: strings.Join(relatedReasons[doc.ID], ", "),
+			Score: round2(item.score), Reason: strings.Join(cand.Reasons, ", "),
 			Snippet: pickSnippet(chunks, bundle.FocusTerms),
 		})
 	}
@@ -324,8 +344,63 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 	}
 	bundle.Symbols = dedupeSymbols(symbolHits)
 	bundle.References = dedupeRefs(refHits)
-	bundle.GeneratedNote = "relith reasoning bundle: FTS + AST symbols + references + graph links"
+	bundle.GeneratedNote = "relith hybrid retrieval: FTS seeds + AST symbols + references + graph rerank"
 	return bundle, nil
+}
+
+func (e *Engine) collectSearchHits(ctx context.Context, query string, terms []string, limit int, repoName string) ([]search.Result, error) {
+	seen := map[int64]search.Result{}
+	add := func(result search.Result, reasonBoost float64) {
+		if repoName != "" && result.RepoName != repoName {
+			return
+		}
+		existing, ok := seen[result.DocumentID]
+		if !ok || result.Score+reasonBoost > existing.Score {
+			result.Score += reasonBoost
+			seen[result.DocumentID] = result
+		}
+	}
+
+	queries := []struct {
+		q     string
+		boost float64
+	}{
+		{q: query, boost: 0},
+	}
+	for _, term := range terms {
+		if term == query {
+			continue
+		}
+		queries = append(queries, struct {
+			q     string
+			boost float64
+		}{q: term, boost: 0.8})
+	}
+
+	for _, item := range queries {
+		hits, err := e.search.Search(ctx, item.q, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, hit := range hits {
+			add(hit, item.boost)
+		}
+	}
+
+	var out []search.Result
+	for _, h := range seen {
+		out = append(out, h)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Score == out[j].Score {
+			return out[i].DocumentID < out[j].DocumentID
+		}
+		return out[i].Score > out[j].Score
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 func (b TraceBundle) Text() string {

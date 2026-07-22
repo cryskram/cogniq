@@ -264,6 +264,156 @@ func (s *Server) handleGetFileOutline(ctx context.Context, params map[string]any
 	return s.textContent(sb.String())
 }
 
+func (s *Server) handleGetSymbolDefinition(ctx context.Context, params map[string]any) CallToolResult {
+	name := strParam(params, "name")
+	if name == "" {
+		return s.errorContent("name is required")
+	}
+	repoName := strParam(params, "repo_name")
+	kind := strParam(params, "kind")
+	maxResults := intParam(params, "max_results", 10)
+
+	rows, err := s.queries.FindSymbolsByName(ctx, sql.NullString{String: name, Valid: true})
+	if err != nil {
+		return s.errorContent(fmt.Sprintf("find symbols failed: %v", err))
+	}
+
+	reposByID := map[int64]db.Repository{}
+	if repoName != "" {
+		repo, err := s.findRepo(ctx, repoName)
+		if err != nil {
+			return s.errorContent(err.Error())
+		}
+		reposByID[repo.ID] = repo
+	}
+
+	type def struct {
+		Name    string
+		Kind    string
+		Repo    string
+		Path    string
+		Line    int64
+		Col     int64
+		Snippet string
+	}
+	var defs []def
+	for _, row := range rows {
+		if row.Name != name {
+			continue
+		}
+		if kind != "" && !strings.EqualFold(row.Kind, kind) {
+			continue
+		}
+		if repoName != "" && row.RepoName != repoName {
+			continue
+		}
+		repo, ok := reposByID[row.RepoID]
+		if !ok {
+			repo, err = s.findRepo(ctx, row.RepoName)
+			if err != nil {
+				continue
+			}
+			reposByID[row.RepoID] = repo
+		}
+		content, err := indexer.ReadFileContent(filepath.Join(repo.Path, row.Path), 10*1024*1024)
+		if err != nil {
+			continue
+		}
+		defs = append(defs, def{
+			Name:    row.Name,
+			Kind:    row.Kind,
+			Repo:    row.RepoName,
+			Path:    row.Path,
+			Line:    row.Line,
+			Col:     row.Col,
+			Snippet: lineWindow(content, int(row.Line), 3),
+		})
+		if len(defs) >= maxResults {
+			break
+		}
+	}
+
+	if len(defs) == 0 {
+		return s.textContent("No symbol definitions found matching: " + name)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Symbol definition(s) for %q:\n\n", name))
+	for i, d := range defs {
+		sb.WriteString(fmt.Sprintf("--- %d ---\n", i+1))
+		sb.WriteString(fmt.Sprintf("Repo:   %s\n", d.Repo))
+		sb.WriteString(fmt.Sprintf("File:   %s\n", d.Path))
+		sb.WriteString(fmt.Sprintf("Kind:   %s\n", d.Kind))
+		sb.WriteString(fmt.Sprintf("Line:   %d:%d\n", d.Line, d.Col))
+		sb.WriteString(fmt.Sprintf("Snippet:\n%s\n\n", d.Snippet))
+	}
+	return s.textContent(sb.String())
+}
+
+func (s *Server) handleFindCallees(ctx context.Context, params map[string]any) CallToolResult {
+	name := strParam(params, "name")
+	if name == "" {
+		return s.errorContent("name is required")
+	}
+	repoName := strParam(params, "repo_name")
+	maxResults := intParam(params, "max_results", 15)
+
+	rows, err := s.queries.FindSymbolsByName(ctx, sql.NullString{String: name, Valid: true})
+	if err != nil {
+		return s.errorContent(fmt.Sprintf("find symbols failed: %v", err))
+	}
+
+	type callee struct {
+		Name  string
+		Count int64
+	}
+	var out strings.Builder
+	out.WriteString(fmt.Sprintf("Callees for %q:\n\n", name))
+	printedAny := false
+	for _, sym := range rows {
+		if sym.Name != name {
+			continue
+		}
+		if repoName != "" && sym.RepoName != repoName {
+			continue
+		}
+
+		query := `SELECT name, COUNT(*) AS c FROM refs WHERE doc_id = ? GROUP BY name ORDER BY c DESC, name LIMIT ?`
+		refRows, err := s.db.QueryContext(ctx, query, sym.DocID, maxResults)
+		if err != nil {
+			continue
+		}
+
+		var callees []callee
+		for refRows.Next() {
+			var c callee
+			if err := refRows.Scan(&c.Name, &c.Count); err != nil {
+				continue
+			}
+			if c.Name == name {
+				continue
+			}
+			callees = append(callees, c)
+		}
+		refRows.Close()
+		if len(callees) == 0 {
+			continue
+		}
+
+		printedAny = true
+		out.WriteString(fmt.Sprintf("Definition: %s/%s (%s) %d:%d\n", sym.RepoName, sym.Path, sym.Kind, sym.Line, sym.Col))
+		for i, c := range callees {
+			out.WriteString(fmt.Sprintf("  %d. %s (%d)\n", i+1, c.Name, c.Count))
+		}
+		out.WriteString("\n")
+	}
+
+	if !printedAny {
+		return s.textContent("No callees found for: " + name)
+	}
+	return s.textContent(out.String())
+}
+
 func (s *Server) handleFindCallers(ctx context.Context, params map[string]any) CallToolResult {
 	name := strParam(params, "name")
 	if name == "" {
@@ -533,6 +683,33 @@ func (s *Server) findRepo(ctx context.Context, repoName string) (db.Repository, 
 		}
 	}
 	return db.Repository{}, fmt.Errorf("repository not found: %s", repoName)
+}
+
+func lineWindow(content string, line, radius int) string {
+	if line < 1 {
+		line = 1
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	start := line - radius - 1
+	if start < 0 {
+		start = 0
+	}
+	end := line + radius
+	if end > len(lines) {
+		end = len(lines)
+	}
+	var sb strings.Builder
+	for i := start; i < end; i++ {
+		prefix := " "
+		if i == line-1 {
+			prefix = ">"
+		}
+		sb.WriteString(fmt.Sprintf("%s %4d | %s\n", prefix, i+1, lines[i]))
+	}
+	return sb.String()
 }
 
 func (s *Server) handleListRepos(ctx context.Context, params map[string]any) CallToolResult {

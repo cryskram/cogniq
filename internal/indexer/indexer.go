@@ -358,6 +358,10 @@ type batchResult struct {
 }
 
 func (idx *Indexer) prepareBatchWork(fi FileInfo, existing db.Document) (batchWork, bool, error) {
+	if existing.Path != "" && existing.Size == fi.Size && existing.ModTime.Unix() == fi.ModTime {
+		return batchWork{}, true, nil
+	}
+
 	content, err := ReadFileContent(fi.FullPath, idx.cfg.MaxFileSize)
 	if err != nil {
 		return batchWork{}, false, fmt.Errorf("read %s: %w", fi.RelPath, err)

@@ -22,9 +22,9 @@ type Chunker func(content string) []Chunk
 var registry = map[string]Chunker{
 	"Go":          GoChunkerAST,
 	"Python":      PythonChunker,
-	"JavaScript":  BraceChunker,
-	"TypeScript":  BraceChunker,
-	"Rust":        BraceChunker,
+	"JavaScript":  JSChunker,
+	"TypeScript":  JSChunker,
+	"Rust":        RustChunker,
 	"Java":        BraceChunker,
 	"Kotlin":      BraceChunker,
 	"C":           BraceChunker,

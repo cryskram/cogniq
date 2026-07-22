@@ -58,13 +58,33 @@ type FileInfo struct {
 	ModTime  int64
 }
 
+var highValueFiles = map[string]bool{
+	"main.go":          true,
+	"app.go":           true,
+	"main.rs":          true,
+	"lib.rs":           true,
+	"index.js":         true,
+	"index.ts":         true,
+	"index.tsx":        true,
+	"index.jsx":        true,
+	"main.js":          true,
+	"main.ts":          true,
+	"main.py":          true,
+	"__init__.py":      true,
+	"package.json":     true,
+	"tsconfig.json":    true,
+	"go.mod":           true,
+	"Cargo.toml":       true,
+	"pyproject.toml":   true,
+}
+
 func WalkRepo(rootPath string, maxFileSize int64) ([]FileInfo, error) {
 	rootPath, err := filepath.Abs(rootPath)
 	if err != nil {
 		return nil, err
 	}
 
-	var files []FileInfo
+	var high, normal []FileInfo
 	err = filepath.WalkDir(rootPath, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -104,7 +124,12 @@ func WalkRepo(rootPath string, maxFileSize int64) ([]FileInfo, error) {
 			return nil
 		}
 
-		files = append(files, FileInfo{
+		files := &normal
+		base := filepath.Base(rel)
+		if highValueFiles[base] {
+			files = &high
+		}
+		*files = append(*files, FileInfo{
 			RelPath:  rel,
 			FullPath: path,
 			Size:     info.Size(),
@@ -113,7 +138,7 @@ func WalkRepo(rootPath string, maxFileSize int64) ([]FileInfo, error) {
 		return nil
 	})
 
-	return files, err
+	return append(high, normal...), err
 }
 
 func ReadFileContent(path string, maxSize int64) (string, error) {
