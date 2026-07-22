@@ -23,7 +23,7 @@ WHERE d.id != d2.id
   AND d2.repo_id = ?
 GROUP BY r.doc_id, s.doc_id
 ORDER BY weight DESC
-LIMIT 500
+LIMIT 1000
 `
 
 func (q *Queries) GetGraphEdges(ctx context.Context, repoID int64) ([]GetGraphEdgesRow, error) {

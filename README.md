@@ -21,6 +21,7 @@ Relith is a **local-first context engine** that indexes your codebases and expos
 
 - **Full-text search** - SQLite FTS5 with BM25 ranking, prefix matching, boolean operators
 - **Multi-repo support** - Index unlimited repos, search across them all at once
+- **Cross-file reasoning** - Search + symbols + references + graph neighbors in one bundle
 - **MCP-native** - Works with Cursor, Claude Code, OpenCode, and any MCP client
 - **REST API** - HTTP server for scripts, CI pipelines, and programmatic access
 - **File watcher** - Auto-reindexes changed files via fsnotify
@@ -74,6 +75,7 @@ Relith exposes an **MCP server** that AI assistants connect to directly. Support
 | `get_repo_summary` | Language breakdown, file/chunk counts | `repo_name` (req) |
 | `find_symbol` | Search symbols by name prefix (functions, classes, structs, etc.) | `name` (req), `kind`, `repo_name` |
 | `find_references` | Find all call sites for a symbol across all repos | `name` (req), `repo_name` |
+| `trace_context` | Cross-file reasoning bundle: search + symbols + references + graph-linked files | `query` (req), `repo_name`, `max_results` |
 
 ### Prerequisites
 
@@ -109,6 +111,8 @@ Command: D:\relith\bin\relithmcp.exe
 }
 ```
 
+> **Windows**: use the full path to `relithmcp.exe` in your MCP config. If you see `permission denied`, move the binary to a user-writable folder and check Windows Defender/SmartScreen for a block.
+
 ## REST API
 
 The daemon (`relithd`) provides an HTTP API for programmatic access:
@@ -121,6 +125,7 @@ curl -s -X POST http://127.0.0.1:9876/v1/repos \
 curl -s -X POST http://127.0.0.1:9876/v1/repos/1/index
 curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
 curl -s "http://127.0.0.1:9876/v1/content?repo=my-repo&path=main.go"
+curl -s "http://127.0.0.1:9876/v1/reason?q=timeout+retry&repo=my-repo"
 curl -s "http://127.0.0.1:9876/v1/stats"
 curl -s "http://127.0.0.1:9876/v1/graph?repo=my-repo"
 ```
@@ -136,6 +141,7 @@ curl -s "http://127.0.0.1:9876/v1/graph?repo=my-repo"
 | `POST` | `/v1/repos/{id}/index` | Trigger indexing |
 | `GET` | `/v1/search?q=` | Full-text search |
 | `GET` | `/v1/content?repo=&path=` | Get file content by repo name and path |
+| `GET` | `/v1/reason?q=&repo=&max_results=` | Cross-file reasoning bundle: search, AST symbols, references, and graph neighbors |
 | `GET` | `/v1/stats` | Aggregate stats: file/chunk counts, raw vs stored bytes, savings % |
 | `GET` | `/v1/graph?repo=` | Knowledge graph data: cross-file reference nodes and edges |
 

@@ -15,6 +15,7 @@ import (
 	"github.com/cryskram/relith/internal/cli"
 	"github.com/cryskram/relith/internal/config"
 	"github.com/cryskram/relith/internal/db"
+	"github.com/cryskram/relith/internal/reasoning"
 	"github.com/cryskram/relith/internal/search"
 )
 
@@ -27,6 +28,7 @@ type Server struct {
 	db          *sql.DB
 	queries     *db.Queries
 	searcher    *search.Searcher
+	reasoner    *reasoning.Engine
 	reader      io.Reader
 	writer      io.Writer
 	tools       map[string]ToolHandler
@@ -56,6 +58,7 @@ func NewServer(database *sql.DB, log zerolog.Logger) *Server {
 		tools:     make(map[string]ToolHandler),
 		resources: make(map[string]ResourceHandler),
 	}
+	s.reasoner = reasoning.New(database, log, s.searcher)
 
 	s.registerTools()
 	s.registerResources()
@@ -69,6 +72,7 @@ func (s *Server) registerTools() {
 	s.tools["get_repo_summary"] = s.handleGetRepoSummary
 	s.tools["find_symbol"] = s.handleFindSymbol
 	s.tools["find_references"] = s.handleFindReferences
+	s.tools["trace_context"] = s.handleTraceContext
 }
 
 func (s *Server) registerResources() {
@@ -223,6 +227,19 @@ func (s *Server) handleToolsList(ctx context.Context, req JSONRPCRequest) {
 					"repo_name": {"type": "string", "description": "Optional: filter by repository name"}
 				},
 				"required": ["name"]
+			}`),
+		},
+		{
+			Name:        "trace_context",
+			Description: "Trace what leads to a behavior by combining full-text search, AST symbol matches, references, and graph-linked files into one reasoning bundle.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"query": {"type": "string", "description": "Behavior, symbol, or keyword phrase to trace"},
+					"repo_name": {"type": "string", "description": "Optional repository filter"},
+					"max_results": {"type": "integer", "description": "Maximum files to return (default 8)", "default": 8}
+				},
+				"required": ["query"]
 			}`),
 		},
 	}

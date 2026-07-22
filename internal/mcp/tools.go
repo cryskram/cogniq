@@ -9,6 +9,7 @@ import (
 
 	"github.com/cryskram/relith/internal/db"
 	"github.com/cryskram/relith/internal/indexer"
+	"github.com/cryskram/relith/internal/reasoning"
 )
 
 func (s *Server) handleSearchCode(ctx context.Context, params map[string]any) CallToolResult {
@@ -152,6 +153,21 @@ func (s *Server) handleFindReferences(ctx context.Context, params map[string]any
 	}
 
 	return s.textContent(sb.String())
+}
+
+func (s *Server) handleTraceContext(ctx context.Context, params map[string]any) CallToolResult {
+	query := strParam(params, "query")
+	if query == "" {
+		return s.errorContent("query is required")
+	}
+
+	repoName := strParam(params, "repo_name")
+	maxResults := intParam(params, "max_results", 8)
+	bundle, err := s.reasoner.Trace(ctx, reasoning.TraceRequest{Query: query, RepoName: repoName, MaxResults: maxResults})
+	if err != nil {
+		return s.errorContent(fmt.Sprintf("trace context failed: %v", err))
+	}
+	return s.textContent(bundle.Text())
 }
 
 func (s *Server) handleGetFileContent(ctx context.Context, params map[string]any) CallToolResult {

@@ -14,7 +14,7 @@ WHERE d.id != d2.id
   AND d2.repo_id = ?
 GROUP BY r.doc_id, s.doc_id
 ORDER BY weight DESC
-LIMIT 500;
+LIMIT 1000;
 
 -- name: GetGraphNodes :many
 SELECT id, path, repo_id FROM documents

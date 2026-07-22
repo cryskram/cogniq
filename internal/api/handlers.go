@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cryskram/relith/internal/db"
 	"github.com/cryskram/relith/internal/indexer"
+	"github.com/cryskram/relith/internal/reasoning"
 	"github.com/cryskram/relith/internal/search"
 )
 
@@ -20,6 +22,19 @@ type handlers struct {
 	queries  *db.Queries
 	indexer  *indexer.Indexer
 	searcher *search.Searcher
+	reasoner *reasoning.Engine
+}
+
+func (h *handlers) reason(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	repo := r.URL.Query().Get("repo")
+	maxResults, _ := strconv.Atoi(r.URL.Query().Get("max_results"))
+	bundle, err := h.reasoner.Trace(r.Context(), reasoning.TraceRequest{Query: query, RepoName: repo, MaxResults: maxResults})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "reason: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, bundle)
 }
 
 func (h *handlers) health(w http.ResponseWriter, r *http.Request) {
@@ -106,6 +121,7 @@ func (h *handlers) graph(w http.ResponseWriter, r *http.Request) {
 type graphNode struct {
 	ID     int64  `json:"id"`
 	Label  string `json:"label"`
+	Path   string `json:"path"`
 	Group  string `json:"group"`
 	RepoID int64  `json:"repo_id"`
 	Size   int    `json:"size"`
@@ -168,8 +184,8 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 			}
 		}
 	}
-	if len(sorted) > 80 {
-		sorted = sorted[:80]
+	if len(sorted) > 300 {
+		sorted = sorted[:300]
 	}
 	keepFile := map[int64]bool{}
 	for _, kv := range sorted {
@@ -213,6 +229,7 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 			allNodes = append(allNodes, graphNode{
 				ID:     -r.ID,
 				Label:  r.Name,
+				Path:   r.Path,
 				Group:  "repo",
 				RepoID: r.ID,
 				Size:   3,
@@ -227,7 +244,8 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 			}
 			allNodes = append(allNodes, graphNode{
 				ID:     id,
-				Label:  docPaths[id],
+				Label:  compactGraphPath(docPaths[id]),
+				Path:   docPaths[id],
 				Group:  "file",
 				RepoID: r.ID,
 				Size:   nodeDegree[id],
@@ -254,6 +272,16 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 		allEdges = []graphEdge{}
 	}
 	return allNodes, allEdges, nil
+}
+
+func compactGraphPath(path string) string {
+	parts := strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	})
+	if len(parts) <= 2 {
+		return path
+	}
+	return strings.Join(parts[len(parts)-2:], "/")
 }
 
 func (h *handlers) listRepos(w http.ResponseWriter, r *http.Request) {
@@ -443,5 +471,3 @@ func (h *handlers) search(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, results)
 }
-
-

@@ -14,6 +14,7 @@ import (
 	"github.com/cryskram/relith/internal/config"
 	"github.com/cryskram/relith/internal/db"
 	"github.com/cryskram/relith/internal/indexer"
+	"github.com/cryskram/relith/internal/reasoning"
 	"github.com/cryskram/relith/internal/search"
 )
 
@@ -25,16 +26,19 @@ type Server struct {
 }
 
 func New(database *sql.DB, logger zerolog.Logger, cfg *config.Config) *Server {
+	searcher := search.New(database, logger, cfg.Search)
 	h := &handlers{
 		queries:  db.New(database),
 		indexer:  indexer.New(database, logger, cfg.Indexer),
-		searcher: search.New(database, logger, cfg.Search),
+		searcher: searcher,
+		reasoner: reasoning.New(database, logger, searcher),
 	}
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /", dashboardHandler())
 	mux.HandleFunc("GET /v1/health", h.health)
 	mux.HandleFunc("GET /v1/stats", h.stats)
+	mux.HandleFunc("GET /v1/reason", h.reason)
 	mux.HandleFunc("GET /v1/graph", h.graph)
 	mux.HandleFunc("GET /v1/repos", h.listRepos)
 	mux.HandleFunc("POST /v1/repos", h.createRepo)
