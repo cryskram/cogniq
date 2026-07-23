@@ -3,10 +3,9 @@ run:
   timeout: 3m
 
 linters:
-  enable:
-    - errcheck
-    - gosimple
-    - govet
+    enable:
+      - errcheck
+      - govet
     - ineffassign
     - staticcheck
     - unused

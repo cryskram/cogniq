@@ -1,11 +1,11 @@
 -- name: GetGraphEdges :many
 WITH symbol_freq AS (
-    SELECT s.name, COUNT(DISTINCT s.doc_id) AS cnt
+    SELECT s.name
     FROM symbols s
     JOIN documents d ON d.id = s.doc_id
     WHERE d.repo_id = ?
     GROUP BY s.name
-    HAVING cnt <= 20
+    HAVING COUNT(DISTINCT s.doc_id) <= 20
 )
 SELECT
   r.doc_id AS source_id,
@@ -17,10 +17,11 @@ FROM refs r
 JOIN symbols s ON s.name = r.name
 JOIN documents d ON d.id = r.doc_id
 JOIN documents d2 ON d2.id = s.doc_id
-JOIN symbol_freq f ON f.name = s.name
 WHERE d.id != d2.id
   AND d.repo_id = ?
   AND d2.repo_id = ?
+  AND r.name IN (SELECT name FROM symbol_freq)
+  AND s.name IN (SELECT name FROM symbol_freq)
 GROUP BY r.doc_id, s.doc_id
 ORDER BY weight DESC
 LIMIT 1000;

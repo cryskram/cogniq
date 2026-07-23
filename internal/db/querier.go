@@ -41,6 +41,7 @@ type Querier interface {
 	GetRepoByPath(ctx context.Context, path string) (Repository, error)
 	GetStats(ctx context.Context) (GetStatsRow, error)
 	ListChunks(ctx context.Context, docID int64) ([]Chunk, error)
+	ListDocPathsByPrefix(ctx context.Context, arg ListDocPathsByPrefixParams) ([]string, error)
 	ListDocuments(ctx context.Context, repoID int64) ([]Document, error)
 	ListRepos(ctx context.Context) ([]Repository, error)
 	UpdateDocument(ctx context.Context, arg UpdateDocumentParams) error

@@ -82,6 +82,7 @@ func (s *Server) registerTools() {
 	s.tools["query_graph"] = s.handleQueryGraph
 	s.tools["get_architecture"] = s.handleGetArchitecture
 	s.tools["trace_dependency"] = s.handleTraceDependency
+	s.tools["get_file_tree"] = s.handleGetFileTree
 }
 
 func (s *Server) registerResources() {
@@ -367,6 +368,18 @@ func (s *Server) handleToolsList(ctx context.Context, req JSONRPCRequest) {
 					"max_results": {"type": "integer", "description": "Maximum results per level (default 20)", "default": 20}
 				},
 				"required": ["repo_name", "path"]
+			}`),
+		},
+		{
+			Name:        "get_file_tree",
+			Description: "Browse the directory tree of a repository. Shows immediate children (directories and files) at the given path.",
+			InputSchema: json.RawMessage(`{
+				"type": "object",
+				"properties": {
+					"repo_name": {"type": "string", "description": "Repository name"},
+					"path": {"type": "string", "description": "Optional directory path (defaults to root)"}
+				},
+				"required": ["repo_name"]
 			}`),
 		},
 	}

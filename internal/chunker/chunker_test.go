@@ -32,7 +32,7 @@ func add(a, b int) int {
 	return a + b
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if len(chunks) < 2 {
@@ -61,7 +61,7 @@ type Bar interface {
 
 type MyFunc func(string) error
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "struct:Foo") {
@@ -88,7 +88,7 @@ func (f Foo) Get() int {
 	return 42
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "method:Do") {
@@ -114,7 +114,7 @@ func NewList[T any]() *List[T] {
 	return &List[T]{}
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "struct:List") {
@@ -138,7 +138,7 @@ func greet() {
 	fmt.Println(msg)
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "function:greet") {
@@ -158,7 +158,7 @@ type Foo struct
 	Name string
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "struct:Foo") {
@@ -167,7 +167,7 @@ type Foo struct
 }
 
 func TestGoChunker_EmptyFile(t *testing.T) {
-	chunks := GoChunker("")
+	chunks := GoChunkerAST("")
 	if chunkCount(chunks) != 0 {
 		t.Errorf("expected 0 chunks for empty file, got %d", chunkCount(chunks))
 	}
@@ -181,7 +181,7 @@ import "fmt"
 var x = 42
 const y = "hello"
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	if chunkCount(chunks) == 0 {
 		t.Errorf("expected fallback chunks for file with no declarations, got 0")
 	}
@@ -523,7 +523,7 @@ func beta() {
 	return 2
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 
 	// Each function should be a separate chunk
 	funcChunks := 0
@@ -556,7 +556,7 @@ func complex() {
 	return
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "function:complex") {
@@ -580,7 +580,7 @@ func run() {
 	fmt.Println(os.Args)
 }
 `
-	chunks := GoChunker(code)
+	chunks := GoChunkerAST(code)
 	names := symbolsOf(chunks)
 
 	if !contains(names, "function:run") {

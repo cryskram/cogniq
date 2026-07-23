@@ -55,7 +55,7 @@ func FallbackChunker(content string) []Chunk {
 func toJSDeclsFromJava(decls []javaDecl) []jsDecl {
 	result := make([]jsDecl, len(decls))
 	for i, d := range decls {
-		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+		result[i] = jsDecl(d)
 	}
 	return result
 }
@@ -63,7 +63,7 @@ func toJSDeclsFromJava(decls []javaDecl) []jsDecl {
 func toJSDeclsFromCpp(decls []cppDecl) []jsDecl {
 	result := make([]jsDecl, len(decls))
 	for i, d := range decls {
-		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+		result[i] = jsDecl(d)
 	}
 	return result
 }
@@ -71,7 +71,7 @@ func toJSDeclsFromCpp(decls []cppDecl) []jsDecl {
 func toJSDeclsFromPhp(decls []phpDecl) []jsDecl {
 	result := make([]jsDecl, len(decls))
 	for i, d := range decls {
-		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+		result[i] = jsDecl(d)
 	}
 	return result
 }
@@ -79,7 +79,7 @@ func toJSDeclsFromPhp(decls []phpDecl) []jsDecl {
 func toJSDeclsFromRuby(decls []rubyDecl) []jsDecl {
 	result := make([]jsDecl, len(decls))
 	for i, d := range decls {
-		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+		result[i] = jsDecl(d)
 	}
 	return result
 }

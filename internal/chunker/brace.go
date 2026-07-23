@@ -12,7 +12,6 @@ var (
 	braceArrowPat   = regexp.MustCompile(`(?i)(?:const|let|var)\s+([A-Za-z_]\w*)\s*=\s*(?:async\s*)?(?:\(|$)`)
 	braceRustImplPat = regexp.MustCompile(`(?i)impl\s+([A-Za-z_]\w*)`)
 	braceRustFnPat   = regexp.MustCompile(`(?i)(?:pub\s+)?(?:unsafe\s+)?fn\s+([A-Za-z_]\w*)`)
-	braceAnnotation  = regexp.MustCompile(`^\s*@\w+`)
 
 	braceSkipPats = []*regexp.Regexp{
 		regexp.MustCompile(`(?i)^\s*(import|package|using|namespace|#include|#define|#if|#endif|#pragma|#region|#endregion)\s`),

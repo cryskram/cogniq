@@ -159,7 +159,6 @@ relith/
 │       └── graph.sql
 │
 ├── bin/                           # Build output (gitignored)
-├── docs/                          # ADRs (empty, planned)
 ├── go.mod, go.sum
 ├── Makefile
 ├── .goreleaser.yaml
@@ -475,9 +474,19 @@ The MCP server (`relithmcp`) implements the [Model Context Protocol](https://mod
 | `get_file_content`    | Retrieve a file's content by repo name + path    | `repo_name` (required), `path` (required)                                                     |
 | `list_repositories`   | List all tracked repos with status and file count | -                                                                                           |
 | `get_repo_summary`    | Language breakdown, file/chunk count, last indexed| `repo_name` (required)                                                                        |
-| `find_symbols`        | Search symbols across repos (functions, types)   | `query` (required), `repo_name` (optional), `kind` (optional), `max_results` (default 20)      |
-| `find_refs`           | Search references/symbol usages across repos     | `query` (required), `repo_name` (optional), `kind` (optional), `max_results` (default 20)      |
-| `graph_hubs`          | Find hub files (high degree centrality) per repo | `repo_name` (required), `limit` (default 10)                                                   |
+| `find_symbol`         | Search symbols by name prefix                    | `name` (required), `kind` (optional), `repo_name` (optional)                                  |
+| `find_references`     | Find all call sites for a symbol name            | `name` (required), `repo_name` (optional)                                                     |
+| `trace_context`       | Combine search + symbols + graph into one bundle | `query` (required), `repo_name` (optional), `max_results` (default 8)                         |
+| `get_file_outline`    | Symbols and refs in a file (metadata + chunks)   | `repo_name` (required), `path` (required)                                                      |
+| `get_symbol_definition`| Find exact definition of a symbol               | `name` (required), `repo_name` (optional), `kind` (optional), `max_results` (default 10)       |
+| `find_callees`        | Functions called inside a symbol's definition    | `name` (required), `repo_name` (optional), `max_results` (default 15)                          |
+| `find_callers`        | Call sites for a symbol (across repos)           | `name` (required), `repo_name` (optional), `max_results` (default 20)                          |
+| `get_related_files`   | Graph neighbors for a file                       | `repo_name` (required), `path` (required), `max_results` (default 12)                          |
+| `list_hub_files`      | Most connected files (degree centrality)         | `repo_name` (optional), `max_results` (default 15)                                             |
+| `query_graph`         | Query graph: neighbors, hotspots, or path        | `mode` (required), `repo_name` (required), `path`, `target_path`, `max_results`                |
+| `get_architecture`    | High-level arch overview (langs, dirs, hubs)     | `repo_name` (required), `max_results` (default 10)                                             |
+| `trace_dependency`    | Import/reference dependency trace (recursive)    | `repo_name` (required), `path` (required), `direction`, `depth` (default 1), `max_results`     |
+| `get_file_tree`       | Browse directory tree (show immediate children)  | `repo_name` (required), `path` (optional, defaults to root)                                    |
 
 ### Transport
 
@@ -533,7 +542,7 @@ relith://repos/{id}/graph        → Graph edges per repo (JSON)
 2. Extract import edges per doc (Go: `import "...", JS/TS: `from "...", Python: `import ...`, Rust: `use ...`)
 3. Compute ref edges: `SELECT FROM refs JOIN symbols ON name` (filtered by `symbol_freq` CTE to exclude names in >20 docs to avoid combinatorial explosion)
 4. Batch INSERT all edges into `graph_edges` table (kinds: `import`, `references`)
-5. Non-import-capable languages (C/C++/Java/PHP/Ruby/etc.) skip the per-doc import loop — only ref edges are computed for those
+5. Non-import-capable languages (C/C++/Java/PHP/Ruby/etc.) skip the per-doc import loop - only ref edges are computed for those
 
 ### Incremental Index (File Change via Watcher)
 
@@ -698,10 +707,10 @@ Uses zerolog (zero-allocation structured logger). Configuration via `log` sectio
 
 ### SQLite Tuning
 
-- `PRAGMA synchronous=NORMAL` — 2x faster writes than FULL with same durability guarantee
-- `PRAGMA cache_size=-64000` — 64MB page cache
-- `PRAGMA temp_store=MEMORY` — temp tables in memory
-- `PRAGMA mmap_size=268435456` — 256MB memory-mapped I/O
+- `PRAGMA synchronous=NORMAL` - 2x faster writes than FULL with same durability guarantee
+- `PRAGMA cache_size=-64000` - 64MB page cache
+- `PRAGMA temp_store=MEMORY` - temp tables in memory
+- `PRAGMA mmap_size=268435456` - 256MB memory-mapped I/O
 
 ### Batch Operations
 
@@ -712,9 +721,21 @@ Uses zerolog (zero-allocation structured logger). Configuration via `log` sectio
 ### Graph Build Optimization
 
 - `symbol_freq` CTE: filters symbol names appearing in >20 docs to avoid combinatorial explosion in `refs JOIN symbols`
-- Import-capable language check: only Go/JS/TS/Python/Rust files get per-doc import loop (C/C++/Java/etc. skipped — ref edges only)
+- Import-capable language check: only Go/JS/TS/Python/Rust files get per-doc import loop (C/C++/Java/etc. skipped - ref edges only)
 - Edges pre-computed into `graph_edges` table; API reads from table instead of re-running the JOIN
 - Graph page filter: only drops edges where both endpoints are outside the top 300 by degree (fix: `&&` not `||`)
+- Compound indexes `refs(name, doc_id)` and `symbols(name, doc_id)` for covering index scans on the graph query
+- Pre-filter refs and symbols to `symbol_freq` names via `WHERE name IN` before the cross-join (reduces intermediate rows from full cross-product to only names passing frequency filter)
+
+### Linux Kernel Benchmark (94,989 C files)
+
+| Phase | Before | After | Speedup |
+|-------|--------|-------|---------|
+| Walk + index | ~14min | ~14min 40s | ~1× (I/O bound) |
+| Graph build | 24min 12s | **1min 8s** | **21×** |
+| **Total** | **38min** | **15min 48s** | **2.4×** |
+
+Remaining indexing bottleneck is per-file processing (read → split → regex parse → write), which is CPU-bound on Go's regex engine and string allocation. See [Remaining Bottlenecks](#remaining-bottlenecks).
 
 ### Language-Specific Chunkers
 
@@ -726,6 +747,26 @@ Generic line-based chunking works for every language, but language-specific chun
 | C/C++/etc.| Function boundary + brace balancing (C, C++, C#, Kotlin, Swift, ObjC, Scala, Dart, Zig, F#) |
 | PHP       | `<?php` / `?>` + function boundary                                     |
 | Ruby      | `def` / `end` scoping                                                  |
+
+### Remaining Bottlenecks
+
+Current per-file processing pipeline (index phase):
+```
+ReadFile (full string) ─┐
+  ├── Chunker: strings.Split(content, "\n")    ← split #1
+  │       └── regex line-by-line for decls
+  ├── ExtractReferences: strings.Split(content, "\n") ← split #2
+  │       └── regex line-by-line \b(\w+)\s*\(
+  └── fastHash(content)                         ← FNV hash
+                          └── writeBatch (serial, 500 files per batch)
+```
+
+Top optimization opportunities (in priority order):
+1. **Triple `strings.Split` elimination**: Do one split per file, pass `[]string` lines to both chunker and ref extractor. Saves 188K redundant splits (94K files × 2).
+2. **Replace regex in ref extraction with byte-level scanner**: Go's `regexp.FindAllStringSubmatchIndex` is 10-50× slower than a hand-written byte scanner for `(` preceded by a word boundary.
+3. **Pipeline writes with reads**: Producer/consumer channel so DB writes overlap with next batch's file preparation.
+4. **Skip generated files**: Linux kernel has `include/generated/`, `*.autoconf.h`, `arch/*/include/generated/` patterns.
+5. **Reuse worker pool**: Currently created/destroyed every 500 files × 188 batches; use a long-lived pool.
 
 ## 15. Version Roadmap
 
@@ -756,18 +797,28 @@ Generic line-based chunking works for every language, but language-specific chun
 
 - Graph-enhanced code reasoning (`internal/reasoning`)
 - Seed-based context gathering (seed docs → related files via graph edges → related repos)
-- MCP tool: `get_code_context` — collects relevant context for a query
+- MCP tool: `get_code_context` - collects relevant context for a query
 - Browser-based graph UI hardened
 
-### v0.4 - Performance & Scale (Current)
+### v0.4 - Performance & Scale
 
-- Graph build optimization: `symbol_freq` CTE filters common names (>20 docs) to avoid combinatorial explosion
+- Graph build optimization: `symbol_freq` CTE + `WHERE name IN` pre-filter + compound indexes
+- Compound indexes `refs(name, doc_id)` and `symbols(name, doc_id)` for covering index scans
+- Pre-filter refs/symbols to `symbol_freq` names via `WHERE name IN` before the cross-join
 - Import-capable language filter: only Go/JS/TS/Python/Rust files get per-doc import loop
-- Edge filter fix in graph UI: `&&` not `||` — drops edges only when both endpoints are outside top 300
+- Edge filter fix in graph UI: `&&` not `||` - drops edges only when both endpoints are outside top 300
 - SQLite PRAGMA tuning: `synchronous=NORMAL`, `cache_size=-64000`, `temp_store=MEMORY`, `mmap_size=268435456`
 - Batch multi-row INSERTs for chunks, symbols, refs, graph edges
 - FTS cleanup: explicit multi-table deletion (`DeleteDocuments`, `DeleteRepoWithData`)
-- All targets: Linux kernel 94K files indexed in ~28min total
+- Linux kernel 94K files: **15min 48s total** (index 14min 40s + graph build 1min 8s, graph 21× faster)
+
+### v0.5 - Code Intelligence (Current)
+
+- MCP tools: `find_symbol`, `find_references`, `get_symbol_definition`, `find_callees`, `find_callers`
+- File intelligence: `get_file_outline` (symbols + refs in a file), `get_file_tree` (directory browser)
+- Graph traversal: `get_related_files`, `trace_dependency`, `query_graph`, `get_architecture`, `list_hub_files`
+- Context gathering: `trace_context` combines FTS search + symbol matches + references + graph-linked files into one reasoning bundle
+- 17 total MCP tools covering search, symbol, reference, graph, and file operations
 
 ### Planned
 

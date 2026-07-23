@@ -41,3 +41,8 @@ WHERE repo_id = ?;
 -- name: DocumentExists :one
 SELECT COUNT(*) FROM documents
 WHERE repo_id = ? AND path = ?;
+
+-- name: ListDocPathsByPrefix :many
+SELECT path FROM documents
+WHERE repo_id = ? AND path LIKE ? || '%'
+ORDER BY path;

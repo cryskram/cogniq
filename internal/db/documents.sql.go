@@ -153,6 +153,40 @@ func (q *Queries) GetDocumentByPath(ctx context.Context, arg GetDocumentByPathPa
 	return i, err
 }
 
+const listDocPathsByPrefix = `-- name: ListDocPathsByPrefix :many
+SELECT path FROM documents
+WHERE repo_id = ? AND path LIKE ? || '%'
+ORDER BY path
+`
+
+type ListDocPathsByPrefixParams struct {
+	RepoID  int64          `json:"repo_id"`
+	Column2 sql.NullString `json:"column_2"`
+}
+
+func (q *Queries) ListDocPathsByPrefix(ctx context.Context, arg ListDocPathsByPrefixParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listDocPathsByPrefix, arg.RepoID, arg.Column2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		items = append(items, path)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDocuments = `-- name: ListDocuments :many
 SELECT id, repo_id, path, size, hash, mod_time, mime_type, language, created_at, updated_at FROM documents
 WHERE repo_id = ?

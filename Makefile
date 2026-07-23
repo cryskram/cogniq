@@ -38,7 +38,7 @@ vet:
 	go vet ./...
 
 lint:
-	golangci-lint run ./... || true
+	golangci-lint run ./...
 
 tidy:
 	go mod tidy

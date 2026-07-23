@@ -1014,7 +1014,7 @@ func (s *Server) queryGraphHotspots(ctx context.Context, repo db.Repository, max
 		count++
 	}
 	if count == 0 {
-		sb.WriteString("  (no graph edges yet — index the repo first)\n")
+		sb.WriteString("  (no graph edges yet - index the repo first)\n")
 	}
 	return s.textContent(sb.String())
 }
@@ -1329,6 +1329,81 @@ func (s *Server) handleTraceDependency(ctx context.Context, params map[string]an
 			indent := strings.Repeat("  ", d.level)
 			sb.WriteString(fmt.Sprintf("  %s%s [%s] (weight=%d)\n", indent, d.path, d.kind, d.weight))
 		}
+	}
+	return s.textContent(sb.String())
+}
+
+func (s *Server) handleGetFileTree(ctx context.Context, params map[string]any) CallToolResult {
+	repoName := strParam(params, "repo_name")
+	if repoName == "" {
+		return s.errorContent("repo_name is required")
+	}
+	prefix := strParam(params, "path")
+
+	repo, err := s.findRepo(ctx, repoName)
+	if err != nil {
+		return s.errorContent(err.Error())
+	}
+
+	paths, err := s.queries.ListDocPathsByPrefix(ctx, db.ListDocPathsByPrefixParams{
+		RepoID:  repo.ID,
+		Column2: sql.NullString{String: prefix, Valid: true},
+	})
+	if err != nil {
+		return s.errorContent(fmt.Sprintf("list paths failed: %v", err))
+	}
+
+	if len(paths) == 0 {
+		return s.textContent(fmt.Sprintf("No files found in %s/%s", repoName, prefix))
+	}
+
+	type entry struct {
+		name  string
+		isDir bool
+	}
+	seen := map[string]entry{}
+	prefixLen := len(prefix)
+	if prefixLen > 0 && !strings.HasSuffix(prefix, "/") {
+		prefixLen++
+	}
+
+	for _, p := range paths {
+		rel := p[prefixLen:]
+		if rel == "" {
+			continue
+		}
+		idx := strings.IndexByte(rel, '/')
+		if idx >= 0 {
+			name := rel[:idx]
+			if _, ok := seen[name]; !ok {
+				seen[name] = entry{name: name, isDir: true}
+			}
+		} else {
+			if _, ok := seen[rel]; !ok {
+				seen[rel] = entry{name: rel, isDir: false}
+			}
+		}
+	}
+
+	var dirs, files []entry
+	for _, e := range seen {
+		if e.isDir {
+			dirs = append(dirs, e)
+		} else {
+			files = append(files, e)
+		}
+	}
+	sort.Slice(dirs, func(i, j int) bool { return dirs[i].name < dirs[j].name })
+	sort.Slice(files, func(i, j int) bool { return files[i].name < files[j].name })
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("File Tree: %s/%s\n", repoName, prefix))
+	sb.WriteString(fmt.Sprintf("  %d directories, %d files\n\n", len(dirs), len(files)))
+	for _, d := range dirs {
+		sb.WriteString(fmt.Sprintf("  [DIR]  %s/\n", d.name))
+	}
+	for _, f := range files {
+		sb.WriteString(fmt.Sprintf("  [FILE] %s\n", f.name))
 	}
 	return s.textContent(sb.String())
 }

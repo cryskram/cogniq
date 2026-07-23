@@ -46,7 +46,6 @@ type MCPConfig struct {
 type IndexerConfig struct {
 	Concurrency int   `mapstructure:"concurrency"`
 	MaxFileSize int64 `mapstructure:"max_file_size"`
-	MaxCommits  int   `mapstructure:"max_commits"`
 }
 
 type WatcherConfig struct {
@@ -82,8 +81,6 @@ func setDefaults(v *viper.Viper) error {
 
 	v.SetDefault("indexer.concurrency", 4)
 	v.SetDefault("indexer.max_file_size", 10*1024*1024)
-	v.SetDefault("indexer.max_commits", 10000)
-
 	v.SetDefault("watcher.enabled", true)
 	v.SetDefault("watcher.debounce", time.Second)
 
