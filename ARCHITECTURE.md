@@ -15,7 +15,8 @@
 11. [Daemon Lifecycle](#11-daemon-lifecycle)
 12. [Configuration Structure](#12-configuration-structure)
 13. [Logging Strategy](#13-logging-strategy)
-14. [Version Roadmap](#14-version-roadmap)
+14. [Performance Optimizations](#14-performance-optimizations)
+15. [Version Roadmap](#15-version-roadmap)
 
 ## 1. High-Level Architecture
 
@@ -90,7 +91,15 @@ relith/
 │   │   ├── indexer.go             # Orchestrator (IndexRepo, IndexFile, DeleteFile)
 │   │   ├── walker.go              # Directory walk + binary/hidden file filter
 │   │   ├── chunker.go             # Line-based chunking with overlap
-│   │   └── language.go            # Extension-to-language mapping
+│   │   ├── language.go            # Extension-to-language mapping
+│   │   ├── symbols.go             # Symbol extraction (functions, types, variables)
+│   │   ├── refs.go                # Ref extraction (function calls, references)
+│   │   ├── graph.go               # Import & ref edge builder for dependency graph
+│   │   ├── cleanup.go             # Multi-table deletion for repo/document removal
+│   │   ├── java.go                # Java-specific chunker (handles generics)
+│   │   ├── cpp.go                 # C/C++/C#/Kotlin/Swift/ObjC/Scala/Dart/Zig/F# chunker
+│   │   ├── php.go                 # PHP chunker
+│   │   └── ruby.go                # Ruby chunker
 │   │
 │   ├── watcher/                   # Filesystem event watcher
 │   │   ├── watcher.go             # fsnotify wrapper
@@ -103,7 +112,11 @@ relith/
 │   │   ├── querier.go             # Generated interface
 │   │   ├── repos.sql.go           # Repo CRUD
 │   │   ├── documents.sql.go       # Document CRUD
-│   │   └── chunks.sql.go          # Chunk CRUD + FTS5 sync
+│   │   ├── chunks.sql.go          # Chunk CRUD + FTS5 sync
+│   │   ├── symbols.sql.go         # Symbol CRUD (functions, types, variables)
+│   │   ├── refs.sql.go            # Ref CRUD (function calls, references)
+│   │   ├── graph.sql.go           # Graph edge queries
+│   │   └── sqlite.go              # Connection, WAL, PRAGMAs (split from db.go)
 │   │
 │   ├── search/                    # Search abstraction over FTS5
 │   │   ├── search.go              # Searcher with FTS5 queries
@@ -140,7 +153,10 @@ relith/
 │   └── queries/                   # sqlc query definitions
 │       ├── repos.sql
 │       ├── documents.sql
-│       └── chunks.sql
+│       ├── chunks.sql
+│       ├── symbols.sql
+│       ├── refs.sql
+│       └── graph.sql
 │
 ├── bin/                           # Build output (gitignored)
 ├── docs/                          # ADRs (empty, planned)
@@ -167,7 +183,7 @@ relith/
 | `cmd/relithmcp`    | Load config, open DB, start MCP server over stdio                    | `internal/mcp`, `internal/config`, `internal/db`     |
 | `internal/api`     | HTTP routing, request validation, JSON marshaling                    | `internal/db`, `internal/search`                     |
 | `internal/mcp`     | JSON-RPC over stdio, tool/resource registration, dispatch            | `internal/db`, `internal/search`                     |
-| `internal/indexer` | Walk filesystems, detect languages, chunk content, hash-based diff   | `internal/db`                                        |
+| `internal/indexer` | Walk filesystems, detect languages, chunk content, hash-based diff, extract symbols/refs, build dependency graph | `internal/db`                                        |
 | `internal/watcher` | Wrap fsnotify, debounce, filter, call IndexFile/DeleteFile           | `internal/indexer`                                   |
 | `internal/db`      | Connection lifecycle, migration runner, sqlc-generated methods       | None (sqlite driver only)                            |
 | `internal/search`  | FTS5 query construction, BM25 ranking, result formatting             | `internal/db`                                        |
@@ -186,11 +202,19 @@ User: relith repo add /path/to/project
 
 CLI ── open DB ──▶ INSERT INTO repositories
                ──▶ Indexer: WalkRepo → for each file:
-                       - compute SHA-256 hash
-                       - detect language
-                       - chunk content (50 lines, 10 overlap)
-                       - write document + chunks to DB
-                       - FTS5 sync triggers populate chunks_fts
+                        - compute SHA-256 hash
+                        - detect language
+                        - chunk content (50 lines, 10 overlap)
+                        - write document + chunks to DB
+                        - FTS5 sync triggers populate chunks_fts
+                        - extract symbols (functions, types, variables)
+                        - extract refs (function calls, imports, references)
+                        - batch INSERT symbols + refs
+               ──▶ BuildGraphForRepo:
+                        - extract import edges (Go/JS/TS/Python/Rust)
+                        - compute ref edges via refs JOIN symbols
+                        - batch INSERT into graph_edges table
+                        - kinds: 'import' (explicit) + 'references' (co-occurrence)
 ```
 
 ### B. Search Query
@@ -330,6 +354,43 @@ CREATE TABLE metadata (
     key     TEXT PRIMARY KEY,
     value   TEXT NOT NULL
 );
+
+-- Symbol definitions (functions, types, variables, macros)
+CREATE TABLE symbols (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    name     TEXT NOT NULL,
+    kind     TEXT NOT NULL DEFAULT 'function'
+             CHECK(kind IN ('function','type','variable','constant','method','field','enum','interface','class','struct','macro','module')),
+    line     INTEGER NOT NULL DEFAULT 0,
+    parent   TEXT
+);
+CREATE INDEX idx_symbols_doc_id ON symbols(doc_id);
+CREATE INDEX idx_symbols_name ON symbols(name);
+
+-- Symbol references (function calls, imports, usages)
+CREATE TABLE refs (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    doc_id   INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    name     TEXT NOT NULL,
+    kind     TEXT NOT NULL DEFAULT 'call'
+             CHECK(kind IN ('call','import','use','write','read','type_ref'))
+);
+CREATE INDEX idx_refs_doc_id ON refs(doc_id);
+CREATE INDEX idx_refs_name ON refs(name);
+
+-- Pre-computed dependency graph edges
+CREATE TABLE graph_edges (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo_id        INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    source_doc_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    target_doc_id  INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    weight         INTEGER NOT NULL DEFAULT 1,
+    kind           TEXT NOT NULL DEFAULT 'import'
+                   CHECK(kind IN ('import','references')),
+    UNIQUE(repo_id, source_doc_id, target_doc_id, kind)
+);
+CREATE INDEX idx_graph_edges_repo_id ON graph_edges(repo_id);
 ```
 
 ### Schema Decisions
@@ -338,6 +399,9 @@ CREATE TABLE metadata (
 - **DATETIME (not TEXT)**: SQLite has no native datetime type, but TEXT ISO 8601 is used for portability. INTEGER timestamps are also valid.
 - **Content-sync FTS5**: The `content=chunks` declaration tells FTS5 to sync automatically via triggers on the `chunks` table. No manual FTS insert/update/delete needed.
 - **`documents` table (not `files`)**: Named `documents` to avoid confusion with filesystem files and to leave room for non-file documents in the future (e.g., documentation pages).
+- **`symbols` + `refs` separate**: Symbol extraction captures definitions; ref extraction captures references. The graph engine joins them on `name` to find co-occurrence. The `symbol_freq` CTE filters names appearing in more than 20 docs to avoid combinatorial explosion (critical for large C/C++ repos).
+- **`graph_edges` pre-computed**: The dependency graph is computed during `BuildGraphForRepo` and stored in `graph_edges`. The API reads from this table rather than re-running the expensive `refs JOIN symbols` query. Two edge kinds: `import` (explicit imports in Go/JS/TS/Python/Rust) and `references` (co-occurrence via refs/symbols join).
+- **FTS content deletion**: FTS5 content-sync triggers only fire on INSERT/UPDATE/DELETE of the `chunks` table. When rows are deleted by FK CASCADE from `documents`, the FTS triggers do NOT fire. Cleanup logic (`DeleteDocuments`, `DeleteRepoWithData`) explicitly walks tables in dependency order (graph_edges → chunks → symbols → refs → documents → repositories) to ensure FTS stays consistent.
 
 ## 7. API Design
 
@@ -364,6 +428,10 @@ POST   /v1/repos/{id}/index            → {"files_indexed": N, "files_skipped":
 
 # Search
 GET    /v1/search?q=<query>            → [{doc_id, path, language, repo_name, content, score}]
+
+# Graph Visualization
+GET    /v1/graph?repo=<name>           → {nodes: [{id, path}], edges: [{source, target, weight}]}
+GET    /v1/graph.html                  → Interactive D3.js force-directed graph (browser)
 ```
 
 ### API Examples
@@ -393,6 +461,7 @@ curl -s "http://127.0.0.1:9876/v1/search?q=sqlite"
 - Commit history (`GET /v1/repos/:id/commits`)
 - Search suggestions (`GET /v1/search/suggest`)
 - SSE event stream (`GET /v1/events`)
+- Web UI beyond graph (planned: search, repo management in browser)
 
 ## 8. MCP Tools
 
@@ -406,6 +475,9 @@ The MCP server (`relithmcp`) implements the [Model Context Protocol](https://mod
 | `get_file_content`    | Retrieve a file's content by repo name + path    | `repo_name` (required), `path` (required)                                                     |
 | `list_repositories`   | List all tracked repos with status and file count | -                                                                                           |
 | `get_repo_summary`    | Language breakdown, file/chunk count, last indexed| `repo_name` (required)                                                                        |
+| `find_symbols`        | Search symbols across repos (functions, types)   | `query` (required), `repo_name` (optional), `kind` (optional), `max_results` (default 20)      |
+| `find_refs`           | Search references/symbol usages across repos     | `query` (required), `repo_name` (optional), `kind` (optional), `max_results` (default 20)      |
+| `graph_hubs`          | Find hub files (high degree centrality) per repo | `repo_name` (required), `limit` (default 10)                                                   |
 
 ### Transport
 
@@ -426,6 +498,8 @@ Uses JSON-RPC 2.0 with MCP protocol version `2024-11-05`. Session lifecycle:
 ```
 relith://repos                  → All repositories (JSON)
 relith://repos/{id}              → Repository metadata
+relith://repos/{id}/files        → File listing per repo (JSON)
+relith://repos/{id}/graph        → Graph edges per repo (JSON)
 ```
 
 ## 9. Indexing Workflow
@@ -444,11 +518,22 @@ relith://repos/{id}              → Repository metadata
    - Detect language (extension map: ~90 languages)
    - Read content
    - Chunk into overlapping segments (default 50 lines, 10 overlap)
-5. Write to DB in a transaction:
+   - **Extract symbols**: regex-based parser per language finds function/type/variable definitions
+   - **Extract refs**: regex-based parser per language finds function calls, imports, references
+5. Write to DB in concurrent batches (multi-row INSERTs):
    - Create/update document row
    - Delete old chunks (if updating)
    - Insert new chunks (FTS5 sync triggers populate `chunks_fts`)
+   - Batch INSERT symbols + refs (199 rows per stmt, respects 999 SQLite param limit)
 6. Update repo: status=`ready`, file_count, last_indexed_at
+
+### Graph Build (runs after index)
+
+1. Clear existing `graph_edges` for repo
+2. Extract import edges per doc (Go: `import "...", JS/TS: `from "...", Python: `import ...`, Rust: `use ...`)
+3. Compute ref edges: `SELECT FROM refs JOIN symbols ON name` (filtered by `symbol_freq` CTE to exclude names in >20 docs to avoid combinatorial explosion)
+4. Batch INSERT all edges into `graph_edges` table (kinds: `import`, `references`)
+5. Non-import-capable languages (C/C++/Java/PHP/Ruby/etc.) skip the per-doc import loop — only ref edges are computed for those
 
 ### Incremental Index (File Change via Watcher)
 
@@ -609,7 +694,40 @@ Uses zerolog (zero-allocation structured logger). Configuration via `log` sectio
 | ERROR | Failures requiring attention | File read error, DB connection lost                          |
 | FATAL | Unrecoverable                | Config load failure, DB migration failure, port in use      |
 
-## 14. Version Roadmap
+## 14. Performance Optimizations
+
+### SQLite Tuning
+
+- `PRAGMA synchronous=NORMAL` — 2x faster writes than FULL with same durability guarantee
+- `PRAGMA cache_size=-64000` — 64MB page cache
+- `PRAGMA temp_store=MEMORY` — temp tables in memory
+- `PRAGMA mmap_size=268435456` — 256MB memory-mapped I/O
+
+### Batch Operations
+
+- All INSERTs use multi-row format (`(?,?), (?,?), ...`) with up to 199 rows per statement
+- Respects SQLite's 999 parameter limit per statement
+- Shared `batchExecer` interface between indexer and graph builder
+
+### Graph Build Optimization
+
+- `symbol_freq` CTE: filters symbol names appearing in >20 docs to avoid combinatorial explosion in `refs JOIN symbols`
+- Import-capable language check: only Go/JS/TS/Python/Rust files get per-doc import loop (C/C++/Java/etc. skipped — ref edges only)
+- Edges pre-computed into `graph_edges` table; API reads from table instead of re-running the JOIN
+- Graph page filter: only drops edges where both endpoints are outside the top 300 by degree (fix: `&&` not `||`)
+
+### Language-Specific Chunkers
+
+Generic line-based chunking works for every language, but language-specific chunkers provide better boundary alignment:
+
+| Language  | Strategy                                                              |
+| --------- | --------------------------------------------------------------------- |
+| Java      | Top-level class boundary + handles nested generics `ApiResponse<Page<...>>` |
+| C/C++/etc.| Function boundary + brace balancing (C, C++, C#, Kotlin, Swift, ObjC, Scala, Dart, Zig, F#) |
+| PHP       | `<?php` / `?>` + function boundary                                     |
+| Ruby      | `def` / `end` scoping                                                  |
+
+## 15. Version Roadmap
 
 ### v0.1 - MVP (Complete)
 
@@ -621,13 +739,37 @@ Uses zerolog (zero-allocation structured logger). Configuration via `log` sectio
 - File watcher (fsnotify + debouncer)
 - Zerolog structured logging
 
-### v0.2.1 - MCP & Polish (Current)
+### v0.2 - Symbol & Graph
 
-- MCP server with 4 tools: search_code, get_file_content, list_repositories, get_repo_summary
+- MCP server with 7 tools: search_code, get_file_content, list_repositories, get_repo_summary, find_symbols, find_refs, graph_hubs
 - Cross-platform builds (Windows + Linux + macOS)
 - Makefile with version injection via ldflags
+- Symbol extraction (functions, types, variables) per language
+- Ref extraction (calls, imports, references) per language
+- Dependency graph engine (import edges + ref co-occurrence)
+- Graph visualization web UI (D3.js force-directed)
+- Language-specific chunkers: Java, C++, PHP, Ruby
+- SQLite performance tuning (PRAGMAs, batch INSERTs)
+- FTS content deletion fix (explicit cleanup for FK CASCADE gaps)
 
-### Planned (Post-v0.2)
+### v0.3 - Reasoning Engine
+
+- Graph-enhanced code reasoning (`internal/reasoning`)
+- Seed-based context gathering (seed docs → related files via graph edges → related repos)
+- MCP tool: `get_code_context` — collects relevant context for a query
+- Browser-based graph UI hardened
+
+### v0.4 - Performance & Scale (Current)
+
+- Graph build optimization: `symbol_freq` CTE filters common names (>20 docs) to avoid combinatorial explosion
+- Import-capable language filter: only Go/JS/TS/Python/Rust files get per-doc import loop
+- Edge filter fix in graph UI: `&&` not `||` — drops edges only when both endpoints are outside top 300
+- SQLite PRAGMA tuning: `synchronous=NORMAL`, `cache_size=-64000`, `temp_store=MEMORY`, `mmap_size=268435456`
+- Batch multi-row INSERTs for chunks, symbols, refs, graph edges
+- FTS cleanup: explicit multi-table deletion (`DeleteDocuments`, `DeleteRepoWithData`)
+- All targets: Linux kernel 94K files indexed in ~28min total
+
+### Planned
 
 - **Git history indexing**: Extract commit history using go-git
 - **Vector embeddings / semantic search**: Natural language queries over code

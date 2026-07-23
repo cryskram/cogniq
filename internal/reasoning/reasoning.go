@@ -261,7 +261,7 @@ func (e *Engine) Trace(ctx context.Context, req TraceRequest) (TraceBundle, erro
 
 	relatedEdges := map[string]EdgeHit{}
 	for repoID := range seedRepos {
-		edges, err := e.queries.GetGraphEdges(ctx, repoID)
+		edges, err := e.queries.GetGraphEdges(ctx, db.GetGraphEdgesParams{RepoID: repoID, RepoID_2: repoID, RepoID_3: repoID})
 		if err != nil {
 			continue
 		}

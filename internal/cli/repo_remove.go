@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/cryskram/relith/internal/db"
+	"github.com/cryskram/relith/internal/indexer"
 )
 
 var repoRemoveCmd = &cobra.Command{
@@ -32,7 +33,7 @@ var repoRemoveCmd = &cobra.Command{
 		if id, parseErr := strconv.ParseInt(arg, 10, 64); parseErr == nil {
 			repo, err := q.GetRepo(context.Background(), id)
 			if err == nil {
-				if err := q.DeleteRepo(context.Background(), repo.ID); err != nil {
+				if err := indexer.DeleteRepoWithData(context.Background(), app.db, repo.ID); err != nil {
 					return fmt.Errorf("delete repo: %w", err)
 				}
 				fmt.Printf("Removed repository: id=%d  name=%s  path=%s\n", repo.ID, repo.Name, repo.Path)
@@ -49,7 +50,7 @@ var repoRemoveCmd = &cobra.Command{
 
 		for _, r := range repos {
 			if r.Name == arg {
-				if err := q.DeleteRepo(context.Background(), r.ID); err != nil {
+				if err := indexer.DeleteRepoWithData(context.Background(), app.db, r.ID); err != nil {
 					return fmt.Errorf("delete repo: %w", err)
 				}
 				fmt.Printf("Removed repository: id=%d  name=%s  path=%s\n", r.ID, r.Name, r.Path)

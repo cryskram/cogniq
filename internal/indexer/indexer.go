@@ -143,9 +143,9 @@ func (idx *Indexer) IndexRepo(ctx context.Context, repoPath string, repoID int64
 			toDelete = append(toDelete, doc.ID)
 		}
 	}
-	for _, id := range toDelete {
-		if err := q.DeleteDocument(ctx, id); err != nil {
-			idx.logger.Error().Err(err).Int64("doc_id", id).Msg("delete stale document")
+	if len(toDelete) > 0 {
+		if err := DeleteDocuments(ctx, idx.db, repoID, toDelete); err != nil {
+			idx.logger.Error().Err(err).Int("stale_count", len(toDelete)).Msg("delete stale documents")
 		}
 	}
 
@@ -396,7 +396,10 @@ func (idx *Indexer) prepareBatchWork(fi FileInfo, existing db.Document) (batchWo
 		return batchWork{}, true, nil
 	}
 
-	refs := ExtractReferences(content)
+	var refs []Ref
+	if isCodeLang(lang) {
+		refs = ExtractReferences(content)
+	}
 
 	return batchWork{
 		relPath:  fi.RelPath,
@@ -471,41 +474,103 @@ func (idx *Indexer) writeBatch(
 			docID = doc.ID
 		}
 
-		for _, c := range w.chunks {
-			if _, err := qtx.CreateChunk(ctx, db.CreateChunkParams{
-				DocID:      docID,
-				ChunkIndex: int64(c.Index),
-				Content:    c.Content,
-			}); err != nil {
-				return fmt.Errorf("create chunk %s: %w", w.relPath, err)
-			}
-			for _, sym := range c.Symbols {
-				if _, err := qtx.CreateSymbol(ctx, db.CreateSymbolParams{
-					DocID: docID,
-					Name:  sym.Name,
-					Kind:  sym.Kind,
-					Line:  int64(sym.Line),
-					Col:   int64(sym.Col),
-				}); err != nil {
-					return fmt.Errorf("create symbol %s: %w", w.relPath, err)
-				}
-			}
+		if err := batchInsertChunks(ctx, tx, docID, w.chunks); err != nil {
+			return fmt.Errorf("insert chunks %s: %w", w.relPath, err)
 		}
-
-		for _, r := range w.refs {
-			if _, err := qtx.CreateRef(ctx, db.CreateRefParams{
-				DocID:   docID,
-				Name:    r.Name,
-				Line:    int64(r.Line),
-				Col:     int64(r.Col),
-				Context: r.Context,
-			}); err != nil {
-				return fmt.Errorf("create ref %s: %w", w.relPath, err)
-			}
+		if err := batchInsertSymbols(ctx, tx, docID, w.chunks); err != nil {
+			return fmt.Errorf("insert symbols %s: %w", w.relPath, err)
+		}
+		if err := batchInsertRefs(ctx, tx, docID, w.refs); err != nil {
+			return fmt.Errorf("insert refs %s: %w", w.relPath, err)
 		}
 	}
 
 	return tx.Commit()
+}
+
+const maxSQLiteParams = 999
+
+func batchInsertChunks(ctx context.Context, tx *sql.Tx, docID int64, chunks []chunker.Chunk) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	return batchExec(ctx, tx, "INSERT INTO chunks (doc_id, chunk_index, content) VALUES ", 3,
+		func(i int) []interface{} { return []interface{}{docID, int64(chunks[i].Index), chunks[i].Content} },
+		len(chunks),
+	)
+}
+
+func batchInsertSymbols(ctx context.Context, tx *sql.Tx, docID int64, chunks []chunker.Chunk) error {
+	var syms []struct {
+		Name string
+		Kind string
+		Line int
+		Col  int
+	}
+	for _, c := range chunks {
+		for _, sym := range c.Symbols {
+			syms = append(syms, struct {
+				Name string
+				Kind string
+				Line int
+				Col  int
+			}{sym.Name, sym.Kind, sym.Line, sym.Col})
+		}
+	}
+	if len(syms) == 0 {
+		return nil
+	}
+	return batchExec(ctx, tx, "INSERT INTO symbols (doc_id, name, kind, line, col) VALUES ", 5,
+		func(i int) []interface{} { return []interface{}{docID, syms[i].Name, syms[i].Kind, int64(syms[i].Line), int64(syms[i].Col)} },
+		len(syms),
+	)
+}
+
+func batchInsertRefs(ctx context.Context, tx *sql.Tx, docID int64, refs []Ref) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	return batchExec(ctx, tx, "INSERT INTO refs (doc_id, name, line, col, context) VALUES ", 5,
+		func(i int) []interface{} { return []interface{}{docID, refs[i].Name, int64(refs[i].Line), int64(refs[i].Col), refs[i].Context} },
+		len(refs),
+	)
+}
+
+func batchExec(ctx context.Context, db batchExecer, prefix string, paramsPerRow int, rowFn func(i int) []interface{}, n int) error {
+	if n == 0 {
+		return nil
+	}
+	maxRows := maxSQLiteParams / paramsPerRow
+	for start := 0; start < n; start += maxRows {
+		end := start + maxRows
+		if end > n {
+			end = n
+		}
+		batchSize := end - start
+
+		var sb strings.Builder
+		sb.Grow(batchSize * (paramsPerRow*8 + 20))
+		sb.WriteString(prefix)
+		args := make([]interface{}, 0, batchSize*paramsPerRow)
+		for j := 0; j < batchSize; j++ {
+			if j > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteByte('(')
+			for k := 0; k < paramsPerRow; k++ {
+				if k > 0 {
+					sb.WriteString(", ")
+				}
+				sb.WriteByte('?')
+			}
+			sb.WriteByte(')')
+			args = append(args, rowFn(start+j)...)
+		}
+		if _, err := db.ExecContext(ctx, sb.String(), args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func IsGitRepo(path string) bool {

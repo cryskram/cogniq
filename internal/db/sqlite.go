@@ -35,13 +35,19 @@ func Open(path string) (*sql.DB, error) {
 		}
 	}
 
-	if _, err := database.Exec("PRAGMA busy_timeout=5000"); err != nil {
-		database.Close()
-		return nil, fmt.Errorf("set busy timeout: %w", err)
+	pragmas := []string{
+		"PRAGMA busy_timeout=5000",
+		"PRAGMA foreign_keys=ON",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA cache_size=-64000",
+		"PRAGMA temp_store=MEMORY",
+		"PRAGMA mmap_size=268435456",
 	}
-	if _, err := database.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		database.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	for _, p := range pragmas {
+		if _, err := database.Exec(p); err != nil {
+			database.Close()
+			return nil, fmt.Errorf("exec %s: %w", p, err)
+		}
 	}
 
 	database.SetMaxOpenConns(1)

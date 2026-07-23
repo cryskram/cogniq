@@ -67,15 +67,31 @@ var statusCmd = &cobra.Command{
 		fmt.Printf("\nTotals: %d files, %d chunks across %d repositories\n", totalFiles, totalChunks, len(repos))
 
 		stats, err := q.GetStats(context.Background())
-		if err == nil && stats.TotalRawBytes > 0 {
-			rawMB := float64(stats.TotalRawBytes) / (1024 * 1024)
-			chunkMB := float64(stats.TotalChunkBytes) / (1024 * 1024)
-			savings := (1 - float64(stats.TotalChunkBytes)/float64(stats.TotalRawBytes)) * 100
-			fmt.Printf("\n  %d files (%.1f MB raw) → %d chunks (%.1f MB stored)  -  %.1f%% less context than full-file reads\n",
-				stats.DocCount, rawMB, stats.ChunkCount, chunkMB, savings)
+		if err == nil {
+			rawBytes := toInt64(stats.TotalRawBytes)
+			chunkBytes := toInt64(stats.TotalChunkBytes)
+			if rawBytes > 0 {
+				rawMB := float64(rawBytes) / (1024 * 1024)
+				chunkMB := float64(chunkBytes) / (1024 * 1024)
+				savings := (1 - float64(chunkBytes)/float64(rawBytes)) * 100
+				fmt.Printf("\n  %d files (%.1f MB raw) → %d chunks (%.1f MB stored)  -  %.1f%% less context than full-file reads\n",
+					stats.DocCount, rawMB, stats.ChunkCount, chunkMB, savings)
+			}
 		}
 		return nil
 	},
+}
+
+func toInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	}
+	return 0
 }
 
 func init() {

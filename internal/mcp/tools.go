@@ -493,7 +493,7 @@ func (s *Server) handleGetRelatedFiles(ctx context.Context, params map[string]an
 		return s.errorContent(fmt.Sprintf("file not found: %s in %s", filePath, repoName))
 	}
 
-	edges, err := s.queries.GetGraphEdges(ctx, repo.ID)
+	edges, err := s.queries.GetGraphEdges(ctx, db.GetGraphEdgesParams{RepoID: repo.ID, RepoID_2: repo.ID, RepoID_3: repo.ID})
 	if err != nil {
 		return s.errorContent(fmt.Sprintf("graph edges failed: %v", err))
 	}
@@ -566,7 +566,7 @@ func (s *Server) handleListHubFiles(ctx context.Context, params map[string]any) 
 	}
 	var hubs []hub
 	for _, repo := range repoIDs {
-		edges, err := s.queries.GetGraphEdges(ctx, repo.ID)
+		edges, err := s.queries.GetGraphEdges(ctx, db.GetGraphEdgesParams{RepoID: repo.ID, RepoID_2: repo.ID, RepoID_3: repo.ID})
 		if err != nil {
 			continue
 		}

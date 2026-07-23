@@ -692,3 +692,365 @@ make_point(int x, int y) {
 		t.Errorf("expected struct:point, got %v", names)
 	}
 }
+
+func TestJavaChunker_Basic(t *testing.T) {
+	code := `package com.example;
+
+import java.util.List;
+
+/**
+ * Javadoc comment
+ */
+public class UserService {
+    private String name;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+}
+
+interface Repository {
+    List<String> findAll();
+}
+
+enum Status {
+    ACTIVE,
+    INACTIVE
+}
+`
+	chunks := JavaChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:UserService") {
+		t.Errorf("expected class:UserService, got %v", names)
+	}
+	if !contains(names, "interface:Repository") {
+		t.Errorf("expected interface:Repository, got %v", names)
+	}
+}
+
+func TestJavaChunker_Annotations(t *testing.T) {
+	code := `@Override
+public String toString() {
+    return "hello";
+}
+
+@Deprecated
+@SuppressWarnings("unchecked")
+public void oldMethod() {
+}
+
+@GetMapping("/api")
+@PreAuthorize("hasRole('ADMIN')")
+public ApiResponse<Page<User>> getUsers(@RequestParam int page) {
+    return service.getUsers(page);
+}
+`
+	chunks := JavaChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "function:toString") {
+		t.Errorf("expected function:toString, got %v", names)
+	}
+	if !contains(names, "function:oldMethod") {
+		t.Errorf("expected function:oldMethod, got %v", names)
+	}
+	if !contains(names, "function:getUsers") {
+		t.Errorf("expected function:getUsers, got %v", names)
+	}
+}
+
+func TestJavaChunker_InnerClass(t *testing.T) {
+	code := `public class Outer {
+    private int x;
+
+    class Inner {
+        void doSomething() {
+        }
+    }
+
+    record Point(int x, int y) {
+    }
+}
+`
+	chunks := JavaChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:Outer") {
+		t.Errorf("expected class:Outer, got %v", names)
+	}
+	if contains(names, "class:Inner") {
+		t.Errorf("did not expect Inner (nested class), got %v", names)
+	}
+}
+
+func TestJavaChunker_EmptyFile(t *testing.T) {
+	chunks := JavaChunker("")
+	if chunks != nil {
+		t.Error("expected nil chunks for empty file")
+	}
+}
+
+func TestCppChunker_ClassAndFunction(t *testing.T) {
+	code := `#include <iostream>
+#include <vector>
+
+namespace myapp {
+    class Foo {
+    public:
+        Foo() = default;
+        void bar();
+        int calculate(int x, int y);
+    };
+
+    struct Point {
+        int x;
+        int y;
+    };
+}
+
+int main(int argc, char* argv[]) {
+    myapp::Foo f;
+    f.calculate(1, 2);
+    return 0;
+}
+`
+	chunks := CppChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "module:myapp") {
+		t.Errorf("expected module:myapp, got %v", names)
+	}
+	if !contains(names, "function:main") {
+		t.Errorf("expected function:main, got %v", names)
+	}
+}
+
+func TestCppChunker_Csharp(t *testing.T) {
+	code := `using System;
+using System.Collections.Generic;
+
+namespace MyApp {
+    public class Service {
+        public string Name { get; set; }
+        public event EventHandler Changed;
+        public delegate void Callback(int x);
+
+        public void DoWork() {
+            Console.WriteLine("working");
+        }
+    }
+
+    public record Person(string Name, int Age);
+}
+`
+	chunks := CppChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "module:MyApp") {
+		t.Errorf("expected module:MyApp, got %v", names)
+	}
+}
+
+func TestCppChunker_Kotlin(t *testing.T) {
+	code := `package com.example
+
+import javax.inject.Inject
+
+class UserService @Inject constructor(
+    private val repository: UserRepository
+) {
+    fun getUsers(): List<User> {
+        return repository.findAll()
+    }
+
+    suspend fun fetchAsync(): User {
+        return withContext(Dispatchers.IO) { repository.get() }
+    }
+}
+
+data class UserDto(
+    val id: Long,
+    val name: String
+)
+
+interface Repository {
+    fun find(): List<User>
+}
+
+object NetworkConfig {
+    val baseUrl = "https://api.example.com"
+}
+`
+	chunks := CppChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:UserService") {
+		t.Errorf("expected class:UserService, got %v", names)
+	}
+	if !contains(names, "function:getUsers") {
+		t.Errorf("expected function:getUsers, got %v", names)
+	}
+	if !contains(names, "function:fetchAsync") {
+		t.Errorf("expected function:fetchAsync, got %v", names)
+	}
+	if !contains(names, "interface:Repository") {
+		t.Errorf("expected interface:Repository, got %v", names)
+	}
+}
+
+func TestCppChunker_Swift(t *testing.T) {
+	code := `import Foundation
+
+class UserManager {
+    private var users: [User] = []
+
+    func fetchUsers() async throws -> [User] {
+        return users
+    }
+
+    func addUser(_ user: User) {
+        users.append(user)
+    }
+}
+
+struct Address {
+    let street: String
+    let city: String
+}
+
+enum NetworkError: Error {
+    case notFound
+    case timeout
+}
+
+protocol DataSource {
+    func load() -> [User]
+}
+
+extension UserManager: DataSource {
+    func load() -> [User] {
+        return users
+    }
+}
+`
+	chunks := CppChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:UserManager") {
+		t.Errorf("expected class:UserManager, got %v", names)
+	}
+	if !contains(names, "class:Address") {
+		t.Errorf("expected class:Address, got %v", names)
+	}
+}
+
+func TestCppChunker_EmptyFile(t *testing.T) {
+	chunks := CppChunker("")
+	if chunks != nil {
+		t.Error("expected nil chunks for empty file")
+	}
+}
+
+func TestPHPChunker_Basic(t *testing.T) {
+	code := `<?php
+
+namespace App\Service;
+
+use App\Entity\User;
+
+class UserService {
+    private $repository;
+
+    public function getUsers(): array {
+        return $this->repository->findAll();
+    }
+
+    public function createUser(string $name): User {
+        $user = new User();
+        $user->setName($name);
+        return $user;
+    }
+}
+
+function helper(): string {
+    return 'helper';
+}
+
+interface CacheInterface {
+    public function get(string $key): mixed;
+    public function set(string $key, mixed $value, int $ttl = 0): void;
+}
+`
+	chunks := PHPChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:UserService") {
+		t.Errorf("expected class:UserService, got %v", names)
+	}
+	if !contains(names, "function:helper") {
+		t.Errorf("expected function:helper, got %v", names)
+	}
+	if !contains(names, "interface:CacheInterface") {
+		t.Errorf("expected interface:CacheInterface, got %v", names)
+	}
+}
+
+func TestPHPChunker_EmptyFile(t *testing.T) {
+	chunks := PHPChunker("")
+	if chunks != nil {
+		t.Error("expected nil chunks for empty file")
+	}
+}
+
+func TestRubyChunker_Basic(t *testing.T) {
+	code := `class UserService
+  def initialize(name)
+    @name = name
+  end
+
+  def get_name
+    @name
+  end
+
+  private
+
+  def internal_method
+    puts "hidden"
+  end
+end
+
+module DataHelper
+  def self.format(data)
+    data.to_s
+  end
+end
+
+def top_level_function
+  puts "hello"
+end
+`
+	chunks := RubyChunker(code)
+	names := symbolsOf(chunks)
+
+	if !contains(names, "class:UserService") {
+		t.Errorf("expected class:UserService, got %v", names)
+	}
+	if !contains(names, "module:DataHelper") {
+		t.Errorf("expected module:DataHelper, got %v", names)
+	}
+	if !contains(names, "function:top_level_function") {
+		t.Errorf("expected function:top_level_function, got %v", names)
+	}
+}
+
+func TestRubyChunker_EmptyFile(t *testing.T) {
+	chunks := RubyChunker("")
+	if chunks != nil {
+		t.Error("expected nil chunks for empty file")
+	}
+}

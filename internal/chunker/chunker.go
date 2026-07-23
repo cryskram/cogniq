@@ -25,18 +25,18 @@ var registry = map[string]Chunker{
 	"JavaScript":  JSChunker,
 	"TypeScript":  JSChunker,
 	"Rust":        RustChunker,
-	"Java":        BraceChunker,
-	"Kotlin":      BraceChunker,
-	"C":           BraceChunker,
-	"C++":         BraceChunker,
-	"C#":          BraceChunker,
-	"Objective-C": BraceChunker,
-	"Zig":         BraceChunker,
-	"Swift":       BraceChunker,
-	"Scala":       BraceChunker,
-	"Dart":        BraceChunker,
-	"PHP":         BraceChunker,
-	"Ruby":        BraceChunker,
+	"Java":        JavaChunker,
+	"Kotlin":      CppChunker,
+	"C":           CppChunker,
+	"C++":         CppChunker,
+	"C#":          CppChunker,
+	"Objective-C": CppChunker,
+	"Zig":         CppChunker,
+	"Swift":       CppChunker,
+	"Scala":       CppChunker,
+	"Dart":        CppChunker,
+	"PHP":         PHPChunker,
+	"Ruby":        RubyChunker,
 	"Perl":        BraceChunker,
 	"F#":          BraceChunker,
 }
@@ -50,6 +50,38 @@ func ForLanguage(language string) Chunker {
 
 func FallbackChunker(content string) []Chunk {
 	return lineBasedChunk(content, 50, 0)
+}
+
+func toJSDeclsFromJava(decls []javaDecl) []jsDecl {
+	result := make([]jsDecl, len(decls))
+	for i, d := range decls {
+		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+	}
+	return result
+}
+
+func toJSDeclsFromCpp(decls []cppDecl) []jsDecl {
+	result := make([]jsDecl, len(decls))
+	for i, d := range decls {
+		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+	}
+	return result
+}
+
+func toJSDeclsFromPhp(decls []phpDecl) []jsDecl {
+	result := make([]jsDecl, len(decls))
+	for i, d := range decls {
+		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+	}
+	return result
+}
+
+func toJSDeclsFromRuby(decls []rubyDecl) []jsDecl {
+	result := make([]jsDecl, len(decls))
+	for i, d := range decls {
+		result[i] = jsDecl{line: d.line, endLine: d.endLine, name: d.name, kind: d.kind, col: d.col}
+	}
+	return result
 }
 
 func lineBasedChunk(content string, chunkSize, overlap int) []Chunk {

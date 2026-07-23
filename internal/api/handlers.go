@@ -48,14 +48,17 @@ func (h *handlers) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rawMB := float64(stats.TotalRawBytes) / (1024 * 1024)
-	chunkMB := float64(stats.TotalChunkBytes) / (1024 * 1024)
+	rawBytes := toInt64(stats.TotalRawBytes)
+	chunkBytes := toInt64(stats.TotalChunkBytes)
+
+	rawMB := float64(rawBytes) / (1024 * 1024)
+	chunkMB := float64(chunkBytes) / (1024 * 1024)
 	var savingsPct float64
-	if stats.TotalRawBytes > 0 {
-		savingsPct = (1 - float64(stats.TotalChunkBytes)/float64(stats.TotalRawBytes)) * 100
+	if rawBytes > 0 {
+		savingsPct = (1 - float64(chunkBytes)/float64(rawBytes)) * 100
 	}
 
-	type resp struct {
+	writeJSON(w, http.StatusOK, struct {
 		RepoCount       int64   `json:"repo_count"`
 		DocCount        int64   `json:"doc_count"`
 		ChunkCount      int64   `json:"chunk_count"`
@@ -66,14 +69,12 @@ func (h *handlers) stats(w http.ResponseWriter, r *http.Request) {
 		SavingsPct      float64 `json:"savings_pct"`
 		SymbolCount     int64   `json:"symbol_count"`
 		RefCount        int64   `json:"ref_count"`
-	}
-
-	writeJSON(w, http.StatusOK, resp{
+	}{
 		RepoCount:       stats.RepoCount,
 		DocCount:        stats.DocCount,
 		ChunkCount:      stats.ChunkCount,
-		TotalRawBytes:   stats.TotalRawBytes,
-		TotalChunkBytes: stats.TotalChunkBytes,
+		TotalRawBytes:   rawBytes,
+		TotalChunkBytes: chunkBytes,
 		RawMB:           round2(rawMB),
 		ChunkMB:         round2(chunkMB),
 		SavingsPct:      round2(savingsPct),
@@ -140,12 +141,11 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 	docPaths := map[int64]string{}
 	nodeDegree := map[int64]int{}
 
-	// First pass: collect all paths and degrees
 	for _, r := range repos {
 		if filterRepoID > 0 && r.ID != filterRepoID {
 			continue
 		}
-		edges, err := h.queries.GetGraphEdges(ctx, r.ID)
+		edges, err := h.queries.GetGraphEdgesFromTable(ctx, r.ID)
 		if err != nil {
 			return nil, nil, fmt.Errorf("graph edges for repo %s: %w", r.Name, err)
 		}
@@ -192,12 +192,11 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 		keepFile[kv.id] = true
 	}
 
-	// Second pass: build repo nodes and add edges for kept files
 	for _, r := range repos {
 		if filterRepoID > 0 && r.ID != filterRepoID {
 			continue
 		}
-		edges, err := h.queries.GetGraphEdges(ctx, r.ID)
+		edges, err := h.queries.GetGraphEdgesFromTable(ctx, r.ID)
 		if err != nil {
 			continue
 		}
@@ -205,11 +204,10 @@ func (h *handlers) buildGraph(ctx context.Context, repos []db.Repository, filter
 			continue
 		}
 
-		// Filter edges to kept files
 		var localEdges []graphEdge
 		localFileIDs := map[int64]bool{}
 		for _, e := range edges {
-			if !keepFile[e.SourceID] || !keepFile[e.TargetID] {
+			if !keepFile[e.SourceID] && !keepFile[e.TargetID] {
 				continue
 			}
 			localEdges = append(localEdges, graphEdge{
@@ -441,6 +439,18 @@ func (h *handlers) content(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(content))
+}
+
+func toInt64(v interface{}) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	case int:
+		return int64(n)
+	}
+	return 0
 }
 
 func round2(v float64) float64 {

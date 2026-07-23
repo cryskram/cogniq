@@ -93,6 +93,42 @@ func (q *Queries) GetRepoByPath(ctx context.Context, path string) (Repository, e
 	return i, err
 }
 
+const getStats = `-- name: GetStats :one
+SELECT
+  (SELECT COUNT(*) FROM repositories) AS repo_count,
+  (SELECT COUNT(*) FROM documents) AS doc_count,
+  (SELECT COUNT(*) FROM chunks) AS chunk_count,
+  (SELECT COALESCE(SUM(size), 0) FROM documents) AS total_raw_bytes,
+  (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chunks) AS total_chunk_bytes,
+  (SELECT COUNT(*) FROM symbols) AS symbol_count,
+  (SELECT COUNT(*) FROM refs) AS ref_count
+`
+
+type GetStatsRow struct {
+	RepoCount       int64       `json:"repo_count"`
+	DocCount        int64       `json:"doc_count"`
+	ChunkCount      int64       `json:"chunk_count"`
+	TotalRawBytes   interface{} `json:"total_raw_bytes"`
+	TotalChunkBytes interface{} `json:"total_chunk_bytes"`
+	SymbolCount     int64       `json:"symbol_count"`
+	RefCount        int64       `json:"ref_count"`
+}
+
+func (q *Queries) GetStats(ctx context.Context) (GetStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getStats)
+	var i GetStatsRow
+	err := row.Scan(
+		&i.RepoCount,
+		&i.DocCount,
+		&i.ChunkCount,
+		&i.TotalRawBytes,
+		&i.TotalChunkBytes,
+		&i.SymbolCount,
+		&i.RefCount,
+	)
+	return i, err
+}
+
 const listRepos = `-- name: ListRepos :many
 SELECT id, path, name, remote_url, status, last_indexed_at, file_count, created_at, updated_at FROM repositories
 ORDER BY name
@@ -145,32 +181,6 @@ type UpdateRepoStatusParams struct {
 	LastIndexedAt sql.NullTime `json:"last_indexed_at"`
 	FileCount     int64        `json:"file_count"`
 	ID            int64        `json:"id"`
-}
-
-const getStats = `-- name: GetStats :one
-SELECT
-  (SELECT COUNT(*) FROM repositories),
-  (SELECT COUNT(*) FROM documents),
-  (SELECT COUNT(*) FROM chunks),
-  (SELECT COALESCE(SUM(size), 0) FROM documents),
-  (SELECT COALESCE(SUM(LENGTH(content)), 0) FROM chunks),
-  (SELECT COUNT(*) FROM symbols),
-  (SELECT COUNT(*) FROM refs)
-`
-
-func (q *Queries) GetStats(ctx context.Context) (GetStatsRow, error) {
-	row := q.db.QueryRowContext(ctx, getStats)
-	var i GetStatsRow
-	err := row.Scan(
-		&i.RepoCount,
-		&i.DocCount,
-		&i.ChunkCount,
-		&i.TotalRawBytes,
-		&i.TotalChunkBytes,
-		&i.SymbolCount,
-		&i.RefCount,
-	)
-	return i, err
 }
 
 func (q *Queries) UpdateRepoStatus(ctx context.Context, arg UpdateRepoStatusParams) error {

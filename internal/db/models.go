@@ -34,6 +34,16 @@ type Document struct {
 	UpdatedAt time.Time      `json:"updated_at"`
 }
 
+type GraphEdge struct {
+	ID          int64          `json:"id"`
+	RepoID      int64          `json:"repo_id"`
+	SourceDocID int64          `json:"source_doc_id"`
+	TargetDocID int64          `json:"target_doc_id"`
+	Kind        string         `json:"kind"`
+	Weight      int64          `json:"weight"`
+	Metadata    sql.NullString `json:"metadata"`
+}
+
 type Metadata struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
@@ -67,22 +77,4 @@ type Symbol struct {
 	Kind  string `json:"kind"`
 	Line  int64  `json:"line"`
 	Col   int64  `json:"col"`
-}
-
-type GetGraphEdgesRow struct {
-	SourceID   int64  `json:"source_id"`
-	SourcePath string `json:"source_path"`
-	TargetID   int64  `json:"target_id"`
-	TargetPath string `json:"target_path"`
-	Weight     int64  `json:"weight"`
-}
-
-type GetStatsRow struct {
-	RepoCount       int64 `json:"repo_count"`
-	DocCount        int64 `json:"doc_count"`
-	ChunkCount      int64 `json:"chunk_count"`
-	TotalRawBytes   int64 `json:"total_raw_bytes"`
-	TotalChunkBytes int64 `json:"total_chunk_bytes"`
-	SymbolCount     int64 `json:"symbol_count"`
-	RefCount        int64 `json:"ref_count"`
 }
